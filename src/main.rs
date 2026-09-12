@@ -1,0 +1,26 @@
+mod node;
+
+use node::*;
+
+fn main() {
+    // Create nodes
+    let mut nodes = (0..2).map(|id| Node::new(id)).collect::<Vec<_>>();
+
+    // Connect nodes
+    let [node0, node1] = nodes.get_disjoint_mut([0, 1]).unwrap();
+    Node::connect(node0, node1);
+
+    // Get tx for interaction from main thread
+    let node0_tx = nodes[0].tx();
+
+    // Run nodes
+    let handles = nodes.into_iter().map(Node::run).collect::<Vec<_>>();
+
+    // Send initial message
+    node0_tx.send(vec![0]).unwrap();
+
+    // Wait for nodes to finish
+    for handle in handles {
+        handle.join().unwrap();
+    }
+}
