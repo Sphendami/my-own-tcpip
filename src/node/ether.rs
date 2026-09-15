@@ -1,5 +1,5 @@
+use crate::node::{Port, PortId};
 use std::collections::HashMap;
-use std::sync::mpsc;
 
 struct Header {
     dst_mac: [u8; 6],
@@ -90,12 +90,10 @@ mod test {
     }
 }
 
-type PortId = u32;
-
 pub(crate) struct Ether<'a> {
     mac_addr: [u8; 6],
     mac_addr_table: HashMap<[u8; 6], PortId>,
-    ports: &'a [mpsc::Sender<Vec<u8>>],
+    ports: &'a HashMap<PortId, Port>,
 }
 
 impl<'a> Ether<'a> {
@@ -105,7 +103,7 @@ impl<'a> Ether<'a> {
     // pub(crate) const ETHERTYPE_ARP: u16 = 0x0806;
     pub(crate) const ETHERTYPE_LOCAL1: u16 = 0x88B5;
 
-    pub(crate) fn new(mac_addr: [u8; 6], ports: &'a [mpsc::Sender<Vec<u8>>]) -> Self {
+    pub(crate) fn new(mac_addr: [u8; 6], ports: &'a HashMap<PortId, Port>) -> Self {
         Ether {
             mac_addr,
             mac_addr_table: HashMap::new(),
@@ -175,7 +173,7 @@ impl<'a> Ether<'a> {
 
         let port_ids = match self.mac_addr_table.get(&dst_mac) {
             Some(port_id) => vec![*port_id],
-            None => (0..self.ports.len() as u32).collect::<Vec<_>>(), // flooding
+            None => (0..self.ports.len() as PortId).collect::<Vec<_>>(), // flooding
         };
 
         println!(
@@ -189,7 +187,7 @@ impl<'a> Ether<'a> {
         println!("Payload: {:02X?}", payload);
 
         for port_id in port_ids {
-            self.ports[port_id as usize].send(frame.clone()).unwrap();
+            self.ports[&port_id].send(frame.clone());
         }
     }
 }
