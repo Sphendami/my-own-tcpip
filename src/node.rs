@@ -1,3 +1,6 @@
+mod ether;
+
+use ether::Ether;
 use std::sync::mpsc;
 use std::thread;
 
@@ -34,14 +37,19 @@ impl Node {
 
     pub(crate) fn run(self) -> thread::JoinHandle<()> {
         thread::spawn(move || {
+            let mac_addr = [0x02, 0, 0, 0, 0, self.id as u8];
+            let mut ether = Ether::new(mac_addr, &self.ports);
             while let Ok(message) = self.rx.recv() {
-                println!("Node {} received: {:?}", self.id, message);
+                println!("Node {} received: {:02X?}", self.id, message);
 
-                if message[0] < 10 {
-                    let new_message = vec![message[0] + 1];
-
-                    println!("Node {} sent on Port {}: {:?}", self.id, 0, new_message);
-                    self.ports[0].send(new_message).unwrap();
+                if message[0] == 0 {
+                    ether.send(
+                        Ether::MAC_ADDR_BROADCAST,
+                        Ether::ETHERTYPE_LOCAL1,
+                        &message[1..],
+                    );
+                } else {
+                    ether.recv(0, message); // todo
                 }
             }
 

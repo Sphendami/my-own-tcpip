@@ -17,7 +17,7 @@ fn main() {
     let handles = nodes.into_iter().map(Node::run).collect::<Vec<_>>();
 
     // Send initial message
-    node0_tx.send(vec![0]).unwrap();
+    node0_tx.send(vec![0, 1, 2, 3]).unwrap();
 
     // Wait for nodes to finish
     for handle in handles {
