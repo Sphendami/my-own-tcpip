@@ -1,23 +1,52 @@
 mod node;
 
+use node::ether::Ether;
 use node::*;
 
 fn main() {
     // Create nodes
-    let mut nodes = (0..2).map(|id| Node::new(id)).collect::<Vec<_>>();
+    let mut node0 = Node::new(0);
+    let phy = node0.add_phy(0).unwrap();
+    let node0_phy0_port0 = phy.add_port(0).unwrap();
 
-    // Connect nodes
-    let [node0, node1] = nodes.get_disjoint_mut([0, 1]).unwrap();
-    Node::connect(node0, node1);
+    let mut node1 = Node::new(1);
+    let phy = node1.add_phy(0).unwrap();
+    let node1_phy0_port0 = phy.add_port(0).unwrap();
 
-    // Get meta port for interaction from main thread
-    let meta_port_node0 = nodes[0].meta_port();
+    // Connect ports
+    node0_phy0_port0.connect(node1_phy0_port0);
 
     // Run nodes
-    let handles = nodes.into_iter().map(Node::run).collect::<Vec<_>>();
+    let handles = [
+        node0.run(|mut node| {
+            let mac_addr = [0x02, 0, 0, 0, 0, node.id as u8];
+            let phy = node.phys.remove(&0).unwrap();
+            let mut ether = Ether::new(mac_addr, phy);
 
-    // Send initial message
-    meta_port_node0.send(vec![0, 1, 2, 3]);
+            while let Some(data) = ether.recv() {
+                println!("Node#{} received: {:02X?}", node.id, data);
+
+                ether.send(Ether::MAC_ADDR_BROADCAST, Ether::ETHERTYPE_LOCAL1, &data);
+            }
+
+            println!("Node#{} exiting.", node.id);
+        }),
+        node1.run(|mut node| {
+            let mac_addr = [0x02, 0, 0, 0, 0, node.id as u8];
+            let phy = node.phys.remove(&0).unwrap();
+            let mut ether = Ether::new(mac_addr, phy);
+
+            let payload = vec![0, 1, 2, 3];
+            println!("Node#{} sending: {:02X?}", node.id, payload);
+            ether.send(Ether::MAC_ADDR_BROADCAST, Ether::ETHERTYPE_LOCAL1, &payload);
+
+            while let Some(data) = ether.recv() {
+                println!("Node#{} received: {:02X?}", node.id, data);
+            }
+
+            println!("Node#{} exiting.", node.id);
+        }),
+    ];
 
     // Wait for nodes to finish
     for handle in handles {

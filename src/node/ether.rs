@@ -1,4 +1,5 @@
-use crate::node::{Port, PortId};
+use crate::node::phy;
+use crate::node::phy::Phy;
 use std::collections::HashMap;
 
 struct Header {
@@ -90,31 +91,36 @@ mod test {
     }
 }
 
-pub(crate) struct Ether<'a> {
+pub(crate) struct Ether {
     mac_addr: [u8; 6],
-    mac_addr_table: HashMap<[u8; 6], PortId>,
-    ports: &'a HashMap<PortId, Port>,
+    mac_addr_table: HashMap<[u8; 6], phy::PortId>,
+    phy: Phy,
 }
 
-impl<'a> Ether<'a> {
+impl Ether {
     pub(crate) const MAC_ADDR_BROADCAST: [u8; 6] = [0xFF; 6];
 
     // pub(crate) const ETHERTYPE_IPV4: u16 = 0x0800;
     // pub(crate) const ETHERTYPE_ARP: u16 = 0x0806;
     pub(crate) const ETHERTYPE_LOCAL1: u16 = 0x88B5;
 
-    pub(crate) fn new(mac_addr: [u8; 6], ports: &'a HashMap<PortId, Port>) -> Self {
+    pub(crate) fn new(mac_addr: [u8; 6], phy: Phy) -> Self {
         Ether {
             mac_addr,
             mac_addr_table: HashMap::new(),
-            ports,
+            phy,
         }
     }
 
-    pub(crate) fn recv(&mut self, port_id: PortId, frame: Vec<u8>) {
+    pub(crate) fn recv(&mut self) -> Option<Vec<u8>> {
+        let phy::Msg {
+            port_id,
+            data: frame,
+        } = self.phy.recv();
+
         if frame.len() < 64 {
-            println!("Ether received frame too short on port {}", port_id);
-            return;
+            eprintln!("Ether received frame too short on port {}", port_id);
+            return None;
         }
         let header = &frame[..14];
         let payload = &frame[14..frame.len() - 4];
@@ -122,25 +128,25 @@ impl<'a> Ether<'a> {
         let header = match Header::try_from(header) {
             Ok(header) => header,
             Err(e) => {
-                println!(
+                eprintln!(
                     "Ether received frame with invalid header on port {}: {}",
                     port_id, e
                 );
-                return;
+                return None;
             }
         };
 
         if crc32(&frame) != 0 {
-            println!("Ether received frame with invalid CRC on port {}", port_id);
-            return;
+            eprintln!("Ether received frame with invalid CRC on port {}", port_id);
+            return None;
         }
 
         if header.dst_mac != self.mac_addr && header.dst_mac != Self::MAC_ADDR_BROADCAST {
-            println!(
+            eprintln!(
                 "Ether received frame not for this MAC on port {}: dst_mac={:?}",
                 port_id, header.dst_mac
             );
-            return;
+            return None;
         }
 
         // Update MAC address table
@@ -155,6 +161,8 @@ impl<'a> Ether<'a> {
             frame.len()
         );
         println!("Payload: {:02X?}", payload);
+
+        Some(payload.to_vec())
     }
 
     pub(crate) fn send(&self, dst_mac: [u8; 6], ethertype: u16, payload: &[u8]) {
@@ -171,14 +179,11 @@ impl<'a> Ether<'a> {
         let crc = crc32(&frame);
         frame.extend_from_slice(&crc.to_be_bytes());
 
-        let port_ids = match self.mac_addr_table.get(&dst_mac) {
-            Some(port_id) => vec![*port_id],
-            None => (0..self.ports.len() as PortId).collect::<Vec<_>>(), // flooding
-        };
+        let port_id = self.mac_addr_table.get(&dst_mac);
 
         println!(
-            "Ether sending frame on ports {:?}: dst_mac={:02X?}, src_mac={:02X?}, ethertype={:#X}, frame_len={}",
-            port_ids,
+            "Ether sending frame on port {:?}: dst_mac={:02X?}, src_mac={:02X?}, ethertype={:#X}, frame_len={}",
+            port_id,
             dst_mac,
             self.mac_addr,
             ethertype,
@@ -186,8 +191,11 @@ impl<'a> Ether<'a> {
         );
         println!("Payload: {:02X?}", payload);
 
-        for port_id in port_ids {
-            self.ports[&port_id].send(frame.clone());
+        if let Some(&port_id) = port_id {
+            self.phy.send(port_id, frame);
+        } else {
+            // Flooding
+            self.phy.send_to_all(frame);
         }
     }
 }
