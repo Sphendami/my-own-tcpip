@@ -1,6 +1,7 @@
 mod node;
 
 use node::ether::Ether;
+use node::ip::Ip;
 use node::*;
 
 fn main() {
@@ -20,28 +21,43 @@ fn main() {
     let handles = [
         node0.run(|mut node| {
             let mac_addr = [0x02, 0, 0, 0, 0, node.id as u8];
+            let ip_addr = [192, 168, 77, node.id as u8];
             let phy = node.phys.remove(&0).unwrap();
-            let mut ether = Ether::new(mac_addr, phy);
+            let ether = Ether::new(mac_addr, phy);
+            let mut ip = Ip::new(ip_addr, ether);
 
-            while let Some(data) = ether.recv() {
+            while let Some(data) = ip.recv() {
                 println!("Node#{} received: {:02X?}", node.id, data);
 
-                ether.send(Ether::MAC_ADDR_BROADCAST, Ether::ETHERTYPE_LOCAL1, &data);
+                if let ip::Msg::Data(data) = data {
+                    println!("Node#{} sending back", node.id);
+                    ip.send([192, 168, 77, 1], &data);
+                }
             }
 
             println!("Node#{} exiting.", node.id);
         }),
         node1.run(|mut node| {
             let mac_addr = [0x02, 0, 0, 0, 0, node.id as u8];
+            let ip_addr = [192, 168, 77, node.id as u8];
             let phy = node.phys.remove(&0).unwrap();
-            let mut ether = Ether::new(mac_addr, phy);
+            let ether = Ether::new(mac_addr, phy);
+            let mut ip = Ip::new(ip_addr, ether);
 
             let payload = vec![0, 1, 2, 3];
-            println!("Node#{} sending: {:02X?}", node.id, payload);
-            ether.send(Ether::MAC_ADDR_BROADCAST, Ether::ETHERTYPE_LOCAL1, &payload);
 
-            while let Some(data) = ether.recv() {
-                println!("Node#{} received: {:02X?}", node.id, data);
+            let mut sent = false;
+            loop {
+                if !sent {
+                    println!("Node#{} sending: {:02X?}", node.id, payload);
+                    sent = ip.send([192, 168, 77, 0], &payload);
+                }
+
+                if let Some(data) = ip.recv() {
+                    println!("Node#{} received: {:02X?}", node.id, data);
+                } else {
+                    break;
+                }
             }
 
             println!("Node#{} exiting.", node.id);

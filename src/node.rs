@@ -1,4 +1,5 @@
 pub(crate) mod ether;
+pub(crate) mod ip;
 mod phy;
 
 use phy::Phy;

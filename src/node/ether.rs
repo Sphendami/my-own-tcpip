@@ -91,8 +91,13 @@ mod test {
     }
 }
 
+pub(crate) struct Msg {
+    pub(crate) ether_type: u16,
+    pub(crate) data: Vec<u8>,
+}
+
 pub(crate) struct Ether {
-    mac_addr: [u8; 6],
+    pub(crate) mac_addr: [u8; 6],
     mac_addr_table: HashMap<[u8; 6], phy::PortId>,
     phy: Phy,
 }
@@ -100,8 +105,8 @@ pub(crate) struct Ether {
 impl Ether {
     pub(crate) const MAC_ADDR_BROADCAST: [u8; 6] = [0xFF; 6];
 
-    // pub(crate) const ETHERTYPE_IPV4: u16 = 0x0800;
-    // pub(crate) const ETHERTYPE_ARP: u16 = 0x0806;
+    pub(crate) const ETHERTYPE_IPV4: u16 = 0x0800;
+    pub(crate) const ETHERTYPE_ARP: u16 = 0x0806;
     pub(crate) const ETHERTYPE_LOCAL1: u16 = 0x88B5;
 
     pub(crate) fn new(mac_addr: [u8; 6], phy: Phy) -> Self {
@@ -112,7 +117,7 @@ impl Ether {
         }
     }
 
-    pub(crate) fn recv(&mut self) -> Option<Vec<u8>> {
+    pub(crate) fn recv(&mut self) -> Option<Msg> {
         let phy::Msg {
             port_id,
             data: frame,
@@ -162,7 +167,10 @@ impl Ether {
         );
         println!("Payload: {:02X?}", payload);
 
-        Some(payload.to_vec())
+        Some(Msg {
+            ether_type: header.ethertype,
+            data: payload.to_vec(),
+        })
     }
 
     pub(crate) fn send(&self, dst_mac: [u8; 6], ethertype: u16, payload: &[u8]) {
