@@ -1,6 +1,8 @@
 mod arp {
+    use crate::node::DbgInfo;
     use crate::node::ether::Ether;
     use std::collections::HashMap;
+    use std::fmt::Display;
 
     pub(crate) struct ArpPacket {
         hardware_type: u16,
@@ -100,14 +102,20 @@ mod arp {
         }
     }
 
+    struct ArpDbgInfo {
+        node_id: u32,
+    }
+
     pub(super) struct Arp {
         arp_table: HashMap<[u8; 4], [u8; 6]>,
+        dbg: ArpDbgInfo,
     }
 
     impl Arp {
-        pub(super) fn new() -> Self {
+        pub(super) fn new(node_id: u32) -> Self {
             Arp {
                 arp_table: HashMap::new(),
+                dbg: ArpDbgInfo { node_id },
             }
         }
 
@@ -146,8 +154,10 @@ mod arp {
             match ArpPacket::try_from(arp_packet_data) {
                 Err(e) => {
                     eprintln!(
-                        "Arp received invalid packet: {}, {:02x?}",
-                        e, arp_packet_data
+                        "{} received invalid packet: {}, {:02x?}",
+                        self.dbg_header(),
+                        e,
+                        arp_packet_data
                     );
                     return;
                 }
@@ -168,8 +178,12 @@ mod arp {
                         || protocol_size != 4
                     {
                         eprintln!(
-                            "Arp unsupported metadata: HW type: {:#04x}, proto type: {:#04x}, HW size: {}, proto size: {}",
-                            hardware_type, protocol_type, hardware_size, protocol_size
+                            "{} unsupported metadata: HW type: {:#04x}, proto type: {:#04x}, HW size: {}, proto size: {}",
+                            self.dbg_header(),
+                            hardware_type,
+                            protocol_type,
+                            hardware_size,
+                            protocol_size
                         );
                         return;
                     }
@@ -178,20 +192,22 @@ mod arp {
 
                     match opcode {
                         ArpPacket::OP_REQUEST => {
-                            println!("Arp req received from {:?}", sender_ip);
+                            println!("{} req received from {:?}", self.dbg_header(), sender_ip);
                             if target_ip == self_ip_addr {
-                                println!("Arp sending reply to {:?}", sender_ip);
+                                println!("{} sending reply to {:?}", self.dbg_header(), sender_ip);
                                 self.send_arp_reply(ether, sender_mac, sender_ip, self_ip_addr);
                             }
                         }
                         ArpPacket::OP_REPLY => {
-                            println!("Arp reply received from {:?}", sender_ip);
+                            println!("{} reply received from {:?}", self.dbg_header(), sender_ip);
                             return;
                         }
                         _ => {
                             eprintln!(
-                                "Arp received from {:?} but invalid op code: {:#04x}",
-                                sender_ip, opcode
+                                "{} received from {:?} but invalid op code: {:#04x}",
+                                self.dbg_header(),
+                                sender_ip,
+                                opcode
                             );
                             return;
                         }
@@ -200,8 +216,23 @@ mod arp {
             }
         }
     }
+
+    impl Display for Arp {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "ARP")
+        }
+    }
+
+    impl DbgInfo for Arp {
+        fn node_id(&self) -> u32 {
+            self.dbg.node_id
+        }
+    }
 }
 
+use std::fmt::Display;
+
+use crate::node::DbgInfo;
 use crate::node::ether;
 use crate::node::ether::Ether;
 use crate::node::ip::arp::ArpPacket;
@@ -213,16 +244,16 @@ pub(crate) enum Msg {
 }
 
 pub(crate) struct Ip {
-    ip_addr: [u8; 4],
+    pub(crate) ip_addr: [u8; 4],
     arp: arp::Arp,
-    ether: Ether,
+    pub(crate) ether: Ether,
 }
 
 impl Ip {
     pub(crate) fn new(ip_addr: [u8; 4], ether: Ether) -> Self {
         Ip {
             ip_addr,
-            arp: arp::Arp::new(),
+            arp: arp::Arp::new(ether.node_id()),
             ether,
         }
     }
@@ -236,13 +267,17 @@ impl Ip {
                 return Some(Msg::TryAgain);
             }
             Ether::ETHERTYPE_IPV4 => {
-                todo!("IP received IPv4 packet: {:02x?}", data);
+                todo!("{} received IPv4 packet: {:02x?}", self.dbg_header(), data);
             }
             Ether::ETHERTYPE_LOCAL1 => {
                 return Some(Msg::Data(data));
             }
             _ => {
-                eprintln!("IP received unsupported EtherType: {:#04x}", ether_type);
+                eprintln!(
+                    "{} received unsupported EtherType: {:#04x}",
+                    self.dbg_header(),
+                    ether_type
+                );
                 return None;
             }
         }
@@ -251,16 +286,30 @@ impl Ip {
     pub(crate) fn send(&mut self, dest_ip: [u8; 4], data: &[u8]) -> bool {
         if let Some(mac_addr) = self.arp.get_mac_addr(dest_ip) {
             println!(
-                "IP sending data to MAC addr: {:02x?} for IP: {:?}",
-                mac_addr, dest_ip
+                "{} sending data to MAC addr: {:02x?} for IP: {:?}",
+                self.dbg_header(),
+                mac_addr,
+                dest_ip
             );
             self.ether.send(*mac_addr, Ether::ETHERTYPE_IPV4, data);
             return true;
         } else {
-            println!("IP sending arp req to {:?}", dest_ip);
+            println!("{} sending arp req to {:?}", self.dbg_header(), dest_ip);
             self.arp
                 .send_arp_request(&self.ether, dest_ip, self.ip_addr);
             return false;
         }
+    }
+}
+
+impl Display for Ip {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "IP")
+    }
+}
+
+impl DbgInfo for Ip {
+    fn node_id(&self) -> u32 {
+        self.ether.node_id()
     }
 }

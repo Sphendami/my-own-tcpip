@@ -1,6 +1,8 @@
+use crate::node::DbgInfo;
 use crate::node::phy;
 use crate::node::phy::Phy;
 use std::collections::HashMap;
+use std::fmt::Display;
 
 struct Header {
     dst_mac: [u8; 6],
@@ -99,7 +101,7 @@ pub(crate) struct Msg {
 pub(crate) struct Ether {
     pub(crate) mac_addr: [u8; 6],
     mac_addr_table: HashMap<[u8; 6], phy::PortId>,
-    phy: Phy,
+    pub(crate) phy: Phy,
 }
 
 impl Ether {
@@ -124,7 +126,11 @@ impl Ether {
         } = self.phy.recv();
 
         if frame.len() < 64 {
-            eprintln!("Ether received frame too short on port {}", port_id);
+            eprintln!(
+                "{} received frame too short on port {}",
+                self.dbg_header(),
+                port_id
+            );
             return None;
         }
         let header = &frame[..14];
@@ -134,22 +140,30 @@ impl Ether {
             Ok(header) => header,
             Err(e) => {
                 eprintln!(
-                    "Ether received frame with invalid header on port {}: {}",
-                    port_id, e
+                    "{} received frame with invalid header on port {}: {}",
+                    self.dbg_header(),
+                    port_id,
+                    e
                 );
                 return None;
             }
         };
 
         if crc32(&frame) != 0 {
-            eprintln!("Ether received frame with invalid CRC on port {}", port_id);
+            eprintln!(
+                "{} received frame with invalid CRC on port {}",
+                self.dbg_header(),
+                port_id
+            );
             return None;
         }
 
         if header.dst_mac != self.mac_addr && header.dst_mac != Self::MAC_ADDR_BROADCAST {
             eprintln!(
-                "Ether received frame not for this MAC on port {}: dst_mac={:?}",
-                port_id, header.dst_mac
+                "{} received frame not for this MAC on port {}: dst_mac={:?}",
+                self.dbg_header(),
+                port_id,
+                header.dst_mac
             );
             return None;
         }
@@ -158,14 +172,14 @@ impl Ether {
         self.mac_addr_table.insert(header.src_mac, port_id);
 
         println!(
-            "Ether received frame on port {}: dst_mac={:02X?}, src_mac={:02X?}, ethertype={:#X}, frame_len={}",
+            "{} received frame on port {}: dst_mac={:02X?}, src_mac={:02X?}, ethertype={:#X}, frame_len={}",
+            self.dbg_header(),
             port_id,
             header.dst_mac,
             header.src_mac,
             header.ethertype,
             frame.len()
         );
-        println!("Payload: {:02X?}", payload);
 
         Some(Msg {
             ether_type: header.ethertype,
@@ -190,14 +204,14 @@ impl Ether {
         let port_id = self.mac_addr_table.get(&dst_mac);
 
         println!(
-            "Ether sending frame on port {:?}: dst_mac={:02X?}, src_mac={:02X?}, ethertype={:#X}, frame_len={}",
+            "{} sending frame on port {:?}: dst_mac={:02X?}, src_mac={:02X?}, ethertype={:#X}, frame_len={}",
+            self.dbg_header(),
             port_id,
             dst_mac,
             self.mac_addr,
             ethertype,
             frame.len()
         );
-        println!("Payload: {:02X?}", payload);
 
         if let Some(&port_id) = port_id {
             self.phy.send(port_id, frame);
@@ -205,5 +219,17 @@ impl Ether {
             // Flooding
             self.phy.send_to_all(frame);
         }
+    }
+}
+
+impl Display for Ether {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Ether")
+    }
+}
+
+impl DbgInfo for Ether {
+    fn node_id(&self) -> u32 {
+        self.phy.node_id()
     }
 }

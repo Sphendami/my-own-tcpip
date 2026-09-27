@@ -15,7 +15,7 @@ fn main() {
     let node1_phy0_port0 = phy.add_port(0).unwrap();
 
     // Connect ports
-    node0_phy0_port0.connect(node1_phy0_port0);
+    node0_phy0_port0.connect(node1_phy0_port0).unwrap();
 
     // Run nodes
     let handles = [
@@ -27,15 +27,15 @@ fn main() {
             let mut ip = Ip::new(ip_addr, ether);
 
             while let Some(data) = ip.recv() {
-                println!("Node#{} received: {:02X?}", node.id, data);
+                println!("Node#{:02} received: {:02X?}", node.id, data);
 
                 if let ip::Msg::Data(data) = data {
-                    println!("Node#{} sending back", node.id);
+                    println!("Node#{:02} sending back", node.id);
                     ip.send([192, 168, 77, 1], &data);
                 }
             }
 
-            println!("Node#{} exiting.", node.id);
+            println!("Node#{:02} exiting.", node.id);
         }),
         node1.run(|mut node| {
             let mac_addr = [0x02, 0, 0, 0, 0, node.id as u8];
@@ -49,18 +49,18 @@ fn main() {
             let mut sent = false;
             loop {
                 if !sent {
-                    println!("Node#{} sending: {:02X?}", node.id, payload);
+                    println!("Node#{:02} sending: {:02X?}", node.id, payload);
                     sent = ip.send([192, 168, 77, 0], &payload);
                 }
 
                 if let Some(data) = ip.recv() {
-                    println!("Node#{} received: {:02X?}", node.id, data);
+                    println!("Node#{:02} received: {:02X?}", node.id, data);
                 } else {
                     break;
                 }
             }
 
-            println!("Node#{} exiting.", node.id);
+            println!("Node#{:02} exiting.", node.id);
         }),
     ];
 

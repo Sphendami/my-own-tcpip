@@ -4,6 +4,7 @@ mod phy;
 
 use phy::Phy;
 use std::collections::HashMap;
+use std::fmt::Display;
 use std::thread;
 
 pub(crate) struct Node {
@@ -23,12 +24,19 @@ impl Node {
         if self.phys.contains_key(&id) {
             return None;
         }
-        let phy = Phy::new(id);
+        let phy = Phy::new(id, self.id);
         self.phys.insert(id, phy);
         Some(self.phys.get_mut(&id).unwrap())
     }
 
     pub(crate) fn run(self, f: impl FnOnce(Node) + Send + 'static) -> thread::JoinHandle<()> {
         thread::spawn(move || f(self))
+    }
+}
+
+trait DbgInfo: Display {
+    fn node_id(&self) -> u32;
+    fn dbg_header(&self) -> String {
+        format!("Node#{:02} {:8}:", self.node_id(), self.to_string())
     }
 }
