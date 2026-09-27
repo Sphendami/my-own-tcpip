@@ -1,7 +1,7 @@
 mod arp {
+    use super::Ip;
     use crate::node::DbgInfo;
     use crate::node::ether::Ether;
-    use std::collections::HashMap;
     use std::fmt::Display;
 
     pub(crate) struct ArpPacket {
@@ -102,55 +102,41 @@ mod arp {
         }
     }
 
-    struct ArpDbgInfo {
-        node_id: u32,
-    }
 
-    pub(super) struct Arp {
-        arp_table: HashMap<[u8; 4], [u8; 6]>,
-        dbg: ArpDbgInfo,
-    }
+    pub(super) struct Arp<'a>(pub(super) &'a mut Ip);
 
-    impl Arp {
-        pub(super) fn new(node_id: u32) -> Self {
-            Arp {
-                arp_table: HashMap::new(),
-                dbg: ArpDbgInfo { node_id },
-            }
-        }
-
+    impl Arp<'_> {
         pub(super) fn get_mac_addr(&self, ip: [u8; 4]) -> Option<&[u8; 6]> {
-            self.arp_table.get(&ip)
+            self.0.arp_table.get(&ip)
         }
 
-        pub(super) fn send_arp_request(&self, ether: &Ether, dest_ip: [u8; 4], sender_ip: [u8; 4]) {
-            let arp_packet =
-                ArpPacket::new(ArpPacket::OP_REQUEST, dest_ip, ether.mac_addr, sender_ip);
-            ether.send(
+        pub(super) fn send_arp_request(&self, dest_ip: [u8; 4]) {
+            let arp_packet = ArpPacket::new(
+                ArpPacket::OP_REQUEST,
+                dest_ip,
+                self.0.ether.mac_addr,
+                self.0.ip_addr,
+            );
+            self.0.ether.send(
                 Ether::MAC_ADDR_BROADCAST,
                 Ether::ETHERTYPE_ARP,
                 &Vec::from(arp_packet),
             );
         }
 
-        fn send_arp_reply(
-            &self,
-            ether: &Ether,
-            dest_mac: [u8; 6],
-            dest_ip: [u8; 4],
-            sender_ip: [u8; 4],
-        ) {
-            let arp_packet =
-                ArpPacket::new(ArpPacket::OP_REPLY, dest_ip, ether.mac_addr, sender_ip);
-            ether.send(dest_mac, Ether::ETHERTYPE_ARP, &Vec::from(arp_packet));
+        fn send_arp_reply(&self, dest_mac: [u8; 6], dest_ip: [u8; 4], sender_ip: [u8; 4]) {
+            let arp_packet = ArpPacket::new(
+                ArpPacket::OP_REPLY,
+                dest_ip,
+                self.0.ether.mac_addr,
+                sender_ip,
+            );
+            self.0
+                .ether
+                .send(dest_mac, Ether::ETHERTYPE_ARP, &Vec::from(arp_packet));
         }
 
-        pub(super) fn handle(
-            &mut self,
-            ether: &Ether,
-            arp_packet_data: &[u8],
-            self_ip_addr: [u8; 4],
-        ) {
+        pub(super) fn handle(&mut self, arp_packet_data: &[u8]) {
             match ArpPacket::try_from(arp_packet_data) {
                 Err(e) => {
                     eprintln!(
@@ -188,14 +174,14 @@ mod arp {
                         return;
                     }
 
-                    self.arp_table.insert(sender_ip, sender_mac);
+                    self.0.arp_table.insert(sender_ip, sender_mac);
 
                     match opcode {
                         ArpPacket::OP_REQUEST => {
                             println!("{} req received from {:?}", self.dbg_header(), sender_ip);
-                            if target_ip == self_ip_addr {
+                            if target_ip == self.0.ip_addr {
                                 println!("{} sending reply to {:?}", self.dbg_header(), sender_ip);
-                                self.send_arp_reply(ether, sender_mac, sender_ip, self_ip_addr);
+                                self.send_arp_reply(sender_mac, sender_ip, self.0.ip_addr);
                             }
                         }
                         ArpPacket::OP_REPLY => {
@@ -217,25 +203,26 @@ mod arp {
         }
     }
 
-    impl Display for Arp {
+    impl Display for Arp<'_> {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             write!(f, "ARP")
         }
     }
 
-    impl DbgInfo for Arp {
+    impl DbgInfo for Arp<'_> {
         fn node_id(&self) -> u32 {
-            self.dbg.node_id
+            self.0.node_id()
         }
     }
 }
 
+use std::collections::HashMap;
 use std::fmt::Display;
 
+use self::arp::{Arp, ArpPacket};
 use crate::node::DbgInfo;
 use crate::node::ether;
 use crate::node::ether::Ether;
-use crate::node::ip::arp::ArpPacket;
 
 #[derive(Debug)]
 pub(crate) enum Msg {
@@ -245,7 +232,7 @@ pub(crate) enum Msg {
 
 pub(crate) struct Ip {
     pub(crate) ip_addr: [u8; 4],
-    arp: arp::Arp,
+    arp_table: HashMap<[u8; 4], [u8; 6]>,
     pub(crate) ether: Ether,
 }
 
@@ -253,7 +240,7 @@ impl Ip {
     pub(crate) fn new(ip_addr: [u8; 4], ether: Ether) -> Self {
         Ip {
             ip_addr,
-            arp: arp::Arp::new(ether.node_id()),
+            arp_table: HashMap::new(),
             ether,
         }
     }
@@ -262,8 +249,7 @@ impl Ip {
         let ether::Msg { ether_type, data } = self.ether.recv()?;
         match ether_type {
             Ether::ETHERTYPE_ARP => {
-                self.arp
-                    .handle(&self.ether, &data[0..ArpPacket::U8_REPR_SIZE], self.ip_addr);
+                Arp(self).handle(&data[0..ArpPacket::U8_REPR_SIZE]);
                 return Some(Msg::TryAgain);
             }
             Ether::ETHERTYPE_IPV4 => {
@@ -284,19 +270,18 @@ impl Ip {
     }
 
     pub(crate) fn send(&mut self, dest_ip: [u8; 4], data: &[u8]) -> bool {
-        if let Some(mac_addr) = self.arp.get_mac_addr(dest_ip) {
+        if let Some(&mac_addr) = Arp(self).get_mac_addr(dest_ip) {
             println!(
                 "{} sending data to MAC addr: {:02x?} for IP: {:?}",
                 self.dbg_header(),
                 mac_addr,
                 dest_ip
             );
-            self.ether.send(*mac_addr, Ether::ETHERTYPE_IPV4, data);
+            self.ether.send(mac_addr, Ether::ETHERTYPE_IPV4, data);
             return true;
         } else {
             println!("{} sending arp req to {:?}", self.dbg_header(), dest_ip);
-            self.arp
-                .send_arp_request(&self.ether, dest_ip, self.ip_addr);
+            Arp(self).send_arp_request(dest_ip);
             return false;
         }
     }
