@@ -2,10 +2,11 @@ pub(crate) mod ether;
 pub(crate) mod ip;
 mod phy;
 
-use phy::Phy;
 use std::collections::HashMap;
 use std::fmt::Display;
 use std::thread;
+
+use self::phy::Phy;
 
 pub(crate) struct Node {
     pub(crate) id: u32,

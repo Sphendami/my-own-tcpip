@@ -147,6 +147,10 @@ impl Phy {
         Some(self.ports.get_mut(&id).unwrap())
     }
 
+    pub(crate) fn try_recv(&self) -> Option<Msg> {
+        self.rx.try_recv().ok()
+    }
+
     pub(crate) fn recv(&self) -> Msg {
         self.rx.recv().unwrap()
     }

@@ -1,8 +1,8 @@
 mod node;
 
-use node::ether::Ether;
-use node::ip::Ip;
-use node::*;
+use crate::node::ether::Ether;
+use crate::node::ip::{Ip, IpIf, Subnet};
+use crate::node::*;
 
 fn main() {
     // Create nodes
@@ -22,45 +22,44 @@ fn main() {
         node0.run(|mut node| {
             let mac_addr = [0x02, 0, 0, 0, 0, node.id as u8];
             let ip_addr = [192, 168, 77, node.id as u8];
+            let subnet = Subnet::new(ip_addr, [255, 255, 255, 0]);
             let phy = node.phys.remove(&0).unwrap();
             let ether = Ether::new(mac_addr, phy);
-            let mut ip = Ip::new(ip_addr, ether);
+            let ipif = IpIf::new(ip_addr, ether);
+            let mut ip = Ip::new(vec![ipif]);
+            ip.add_routing(subnet, ip_addr);
 
-            while let Some(data) = ip.recv() {
+            loop {
+                let ip::Msg(data) = ip.recv();
                 println!("Node#{:02} received: {:02X?}", node.id, data);
 
-                if let ip::Msg::Data(data) = data {
-                    println!("Node#{:02} sending back", node.id);
-                    ip.send([192, 168, 77, 1], &data);
-                }
+                println!("Node#{:02} sending back", node.id);
+                ip.send([192, 168, 77, 1], &data);
             }
 
-            println!("Node#{:02} exiting.", node.id);
+            // println!("Node#{:02} exiting.", node.id);
         }),
         node1.run(|mut node| {
             let mac_addr = [0x02, 0, 0, 0, 0, node.id as u8];
             let ip_addr = [192, 168, 77, node.id as u8];
+            let subnet = Subnet::new(ip_addr, [255, 255, 255, 0]);
             let phy = node.phys.remove(&0).unwrap();
             let ether = Ether::new(mac_addr, phy);
-            let mut ip = Ip::new(ip_addr, ether);
+            let ipif = IpIf::new(ip_addr, ether);
+            let mut ip = Ip::new(vec![ipif]);
+            ip.add_routing(subnet, ip_addr);
 
             let payload = vec![0, 1, 2, 3];
 
-            let mut sent = false;
             loop {
-                if !sent {
-                    println!("Node#{:02} sending: {:02X?}", node.id, payload);
-                    sent = ip.send([192, 168, 77, 0], &payload);
-                }
+                println!("Node#{:02} sending: {:02X?}", node.id, payload);
+                ip.send([192, 168, 77, 0], &payload);
 
-                if let Some(data) = ip.recv() {
-                    println!("Node#{:02} received: {:02X?}", node.id, data);
-                } else {
-                    break;
-                }
+                let ip::Msg(data) = ip.recv();
+                println!("Node#{:02} received: {:02X?}", node.id, data);
             }
 
-            println!("Node#{:02} exiting.", node.id);
+            // println!("Node#{:02} exiting.", node.id);
         }),
     ];
 

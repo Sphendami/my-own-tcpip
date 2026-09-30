@@ -1,10 +1,10 @@
 mod arp {
-    use super::Ip;
+    use super::IpIf;
     use crate::node::DbgInfo;
     use crate::node::ether::Ether;
     use std::fmt::Display;
 
-    pub(crate) struct ArpPacket {
+    pub(super) struct ArpPacket {
         hardware_type: u16,
         protocol_type: u16,
         hardware_size: u8,
@@ -102,8 +102,7 @@ mod arp {
         }
     }
 
-
-    pub(super) struct Arp<'a>(pub(super) &'a mut Ip);
+    pub(super) struct Arp<'a>(pub(super) &'a mut IpIf);
 
     impl Arp<'_> {
         pub(super) fn get_mac_addr(&self, ip: [u8; 4]) -> Option<&[u8; 6]> {
@@ -217,6 +216,7 @@ mod arp {
 }
 
 use std::collections::HashMap;
+use std::collections::VecDeque;
 use std::fmt::Display;
 
 use self::arp::{Arp, ArpPacket};
@@ -225,38 +225,60 @@ use crate::node::ether;
 use crate::node::ether::Ether;
 
 #[derive(Debug)]
-pub(crate) enum Msg {
-    Data(Vec<u8>),
-    TryAgain,
-}
+pub(crate) struct Msg(pub(crate) Vec<u8>);
 
-pub(crate) struct Ip {
+pub(crate) struct IpIf {
     pub(crate) ip_addr: [u8; 4],
     arp_table: HashMap<[u8; 4], [u8; 6]>,
+    arp_wait_queue: VecDeque<([u8; 4], Vec<u8>)>,
     pub(crate) ether: Ether,
 }
 
-impl Ip {
+impl IpIf {
     pub(crate) fn new(ip_addr: [u8; 4], ether: Ether) -> Self {
-        Ip {
+        IpIf {
             ip_addr,
             arp_table: HashMap::new(),
+            arp_wait_queue: VecDeque::new(),
             ether,
         }
     }
 
-    pub(crate) fn recv(&mut self) -> Option<Msg> {
-        let ether::Msg { ether_type, data } = self.ether.recv()?;
+    fn try_recv(&mut self) -> Option<Msg> {
+        loop {
+            let msg = self.ether.try_recv()?;
+            if let Some(msg) = self.handle(msg) {
+                return Some(msg);
+            }
+        }
+    }
+
+    #[allow(dead_code)]
+    fn recv(&mut self) -> Msg {
+        loop {
+            let msg = self.ether.recv();
+            if let Some(msg) = self.handle(msg) {
+                return msg;
+            }
+        }
+    }
+
+    fn handle(&mut self, msg: ether::Msg) -> Option<Msg> {
+        let ether::Msg { ether_type, data } = msg;
         match ether_type {
             Ether::ETHERTYPE_ARP => {
                 Arp(self).handle(&data[0..ArpPacket::U8_REPR_SIZE]);
-                return Some(Msg::TryAgain);
+                while let Some((dest_ip, data)) = self.arp_wait_queue.pop_front() {
+                    println!("{} re-sending saved req", self.dbg_header());
+                    self.send(dest_ip, &data);
+                }
+                return None;
             }
             Ether::ETHERTYPE_IPV4 => {
                 todo!("{} received IPv4 packet: {:02x?}", self.dbg_header(), data);
             }
             Ether::ETHERTYPE_LOCAL1 => {
-                return Some(Msg::Data(data));
+                return Some(Msg(data));
             }
             _ => {
                 eprintln!(
@@ -269,7 +291,7 @@ impl Ip {
         }
     }
 
-    pub(crate) fn send(&mut self, dest_ip: [u8; 4], data: &[u8]) -> bool {
+    fn send(&mut self, dest_ip: [u8; 4], data: &[u8]) {
         if let Some(&mac_addr) = Arp(self).get_mac_addr(dest_ip) {
             println!(
                 "{} sending data to MAC addr: {:02x?} for IP: {:?}",
@@ -278,11 +300,126 @@ impl Ip {
                 dest_ip
             );
             self.ether.send(mac_addr, Ether::ETHERTYPE_IPV4, data);
-            return true;
         } else {
+            self.arp_wait_queue.push_back((dest_ip, data.into()));
+            println!("{} saved send req temporarily", self.dbg_header());
             println!("{} sending arp req to {:?}", self.dbg_header(), dest_ip);
             Arp(self).send_arp_request(dest_ip);
-            return false;
+        }
+    }
+}
+
+impl Display for IpIf {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "IP-IF")
+    }
+}
+
+impl DbgInfo for IpIf {
+    fn node_id(&self) -> u32 {
+        self.ether.node_id()
+    }
+}
+
+fn bytewise_and(a: [u8; 4], b: [u8; 4]) -> [u8; 4] {
+    [a[0] & b[0], a[1] & b[1], a[2] & b[2], a[3] & b[3]]
+}
+
+pub(crate) struct Subnet {
+    nw_addr: [u8; 4],
+    mask: [u8; 4],
+}
+
+impl Subnet {
+    pub(crate) fn new(ip_addr: [u8; 4], mask: [u8; 4]) -> Self {
+        let nw_addr = bytewise_and(ip_addr, mask);
+        Self { nw_addr, mask }
+    }
+
+    fn contains(&self, ip_addr: [u8; 4]) -> bool {
+        bytewise_and(ip_addr, self.mask) == self.nw_addr
+    }
+}
+
+struct RoutingTable(Vec<(Subnet, [u8; 4])>);
+
+impl RoutingTable {
+    fn new() -> Self {
+        Self(Vec::new())
+    }
+
+    fn add(&mut self, subnet: Subnet, ifip: [u8; 4]) {
+        self.0.push((subnet, ifip));
+    }
+
+    fn resolve(&self, ip_addr: [u8; 4]) -> Option<[u8; 4]> {
+        self.0.iter().find_map(|(subnet, ifip)| {
+            if subnet.contains(ip_addr) {
+                Some(*ifip)
+            } else {
+                None
+            }
+        })
+    }
+}
+
+pub(crate) struct Ip {
+    ifs: Vec<IpIf>,
+    routing_table: RoutingTable,
+}
+
+impl Ip {
+    pub(crate) fn new(ifs: Vec<IpIf>) -> Self {
+        Self {
+            ifs,
+            routing_table: RoutingTable::new(),
+        }
+    }
+
+    pub(crate) fn add_routing(&mut self, subnet: Subnet, ifip: [u8; 4]) {
+        self.routing_table.add(subnet, ifip);
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn try_recv(&mut self) -> Option<Msg> {
+        for ipif in self.ifs.iter_mut() {
+            let msg = ipif.try_recv();
+            if msg.is_some() {
+                return msg;
+            }
+            // if None, continue to the next ipif
+        }
+        // All None. Give up
+        None
+    }
+
+    pub(crate) fn recv(&mut self) -> Msg {
+        loop {
+            for ipif in self.ifs.iter_mut() {
+                let msg = ipif.try_recv(); // non-blocking check
+                if let Some(msg) = msg {
+                    return msg;
+                }
+                // if None, continue to the next ipif
+            }
+            // All None. Retry forever
+        }
+    }
+
+    pub(crate) fn send(&mut self, dest_ip: [u8; 4], data: &[u8]) {
+        if let Some(if_ip) = self.routing_table.resolve(dest_ip) {
+            let ipif = self
+                .ifs
+                .iter_mut()
+                .find(|ipif| ipif.ip_addr == if_ip)
+                .unwrap();
+            ipif.send(dest_ip, data);
+        } else {
+            panic!(
+                "{} failed to resolve routing to {:?}",
+                self.dbg_header(),
+                dest_ip
+            )
         }
     }
 }
@@ -295,6 +432,6 @@ impl Display for Ip {
 
 impl DbgInfo for Ip {
     fn node_id(&self) -> u32 {
-        self.ether.node_id()
+        self.ifs[0].node_id()
     }
 }

@@ -1,8 +1,9 @@
+use std::collections::HashMap;
+use std::fmt::Display;
+
 use crate::node::DbgInfo;
 use crate::node::phy;
 use crate::node::phy::Phy;
-use std::collections::HashMap;
-use std::fmt::Display;
 
 struct Header {
     dst_mac: [u8; 6],
@@ -119,11 +120,29 @@ impl Ether {
         }
     }
 
-    pub(crate) fn recv(&mut self) -> Option<Msg> {
+    pub(crate) fn try_recv(&mut self) -> Option<Msg> {
+        loop {
+            let msg = self.phy.try_recv()?;
+            if let Some(msg) = self.handle(msg) {
+                return Some(msg);
+            }
+        }
+    }
+
+    pub(crate) fn recv(&mut self) -> Msg {
+        loop {
+            let msg = self.phy.recv();
+            if let Some(msg) = self.handle(msg) {
+                return msg;
+            }
+        }
+    }
+
+    fn handle(&mut self, msg: phy::Msg) -> Option<Msg> {
         let phy::Msg {
             port_id,
             data: frame,
-        } = self.phy.recv();
+        } = msg;
 
         if frame.len() < 64 {
             eprintln!(
