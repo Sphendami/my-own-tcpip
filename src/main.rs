@@ -1,7 +1,7 @@
 mod node;
 
 use crate::node::ether::Ether;
-use crate::node::ip::{Ip, IpIf, Subnet};
+use crate::node::ip::{Ip, IpAddr, IpIf, Subnet};
 use crate::node::*;
 
 fn main() {
@@ -21,8 +21,8 @@ fn main() {
     let handles = [
         node0.run(|mut node| {
             let mac_addr = [0x02, 0, 0, 0, 0, node.id as u8];
-            let ip_addr = [192, 168, 77, node.id as u8];
-            let subnet = Subnet::new(ip_addr, [255, 255, 255, 0]);
+            let ip_addr = IpAddr([192, 168, 77, node.id as u8]);
+            let subnet = Subnet::new(ip_addr, IpAddr([255, 255, 255, 0]));
             let phy = node.phys.remove(&0).unwrap();
             let ether = Ether::new(mac_addr, phy);
             let ipif = IpIf::new(ip_addr, ether);
@@ -34,15 +34,15 @@ fn main() {
                 println!("Node#{:02} received: {:02X?}", node.id, data);
 
                 println!("Node#{:02} sending back", node.id);
-                ip.send([192, 168, 77, 1], &data);
+                ip.send(IpAddr([192, 168, 77, 1]), &data);
             }
 
             // println!("Node#{:02} exiting.", node.id);
         }),
         node1.run(|mut node| {
             let mac_addr = [0x02, 0, 0, 0, 0, node.id as u8];
-            let ip_addr = [192, 168, 77, node.id as u8];
-            let subnet = Subnet::new(ip_addr, [255, 255, 255, 0]);
+            let ip_addr = IpAddr([192, 168, 77, node.id as u8]);
+            let subnet = Subnet::new(ip_addr, IpAddr([255, 255, 255, 0]));
             let phy = node.phys.remove(&0).unwrap();
             let ether = Ether::new(mac_addr, phy);
             let ipif = IpIf::new(ip_addr, ether);
@@ -53,7 +53,7 @@ fn main() {
 
             loop {
                 println!("Node#{:02} sending: {:02X?}", node.id, payload);
-                ip.send([192, 168, 77, 0], &payload);
+                ip.send(IpAddr([192, 168, 77, 0]), &payload);
 
                 let ip::Msg(data) = ip.recv();
                 println!("Node#{:02} received: {:02X?}", node.id, data);

@@ -1,8 +1,11 @@
 mod arp {
+    use std::fmt::Display;
+    use std::ops::Deref;
+
     use super::IpIf;
     use crate::node::DbgInfo;
     use crate::node::ether::Ether;
-    use std::fmt::Display;
+    use crate::node::ip::IpAddr;
 
     pub(super) struct ArpPacket {
         hardware_type: u16,
@@ -11,9 +14,9 @@ mod arp {
         protocol_size: u8,
         opcode: u16,
         sender_mac: [u8; 6],
-        sender_ip: [u8; 4],
+        sender_ip: IpAddr,
         target_mac: [u8; 6],
-        target_ip: [u8; 4],
+        target_ip: IpAddr,
     }
 
     impl ArpPacket {
@@ -26,9 +29,9 @@ mod arp {
 
         pub(super) fn new(
             opcode: u16,
-            dest_ip: [u8; 4],
+            dest_ip: IpAddr,
             sender_mac: [u8; 6],
-            sender_ip: [u8; 4],
+            sender_ip: IpAddr,
         ) -> Self {
             ArpPacket {
                 hardware_type: Self::HTYPE_ETHERNET,
@@ -53,9 +56,9 @@ mod arp {
             bytes.push(packet.protocol_size);
             bytes.extend_from_slice(&packet.opcode.to_be_bytes());
             bytes.extend_from_slice(&packet.sender_mac);
-            bytes.extend_from_slice(&packet.sender_ip);
+            bytes.extend_from_slice(packet.sender_ip.deref());
             bytes.extend_from_slice(&packet.target_mac);
-            bytes.extend_from_slice(&packet.target_ip);
+            bytes.extend_from_slice(packet.target_ip.deref());
             bytes
         }
     }
@@ -81,12 +84,14 @@ mod arp {
             );
             let sender_mac =
                 <[u8; 6]>::try_from(&bytes[8..14]).map_err(|_| "Failed to parse sender_mac")?;
-            let sender_ip =
-                <[u8; 4]>::try_from(&bytes[14..18]).map_err(|_| "Failed to parse sender_ip")?;
+            let sender_ip = IpAddr(
+                <[u8; 4]>::try_from(&bytes[14..18]).map_err(|_| "Failed to parse sender_ip")?,
+            );
             let target_mac =
                 <[u8; 6]>::try_from(&bytes[18..24]).map_err(|_| "Failed to parse target_mac")?;
-            let target_ip =
-                <[u8; 4]>::try_from(&bytes[24..28]).map_err(|_| "Failed to parse target_ip")?;
+            let target_ip = IpAddr(
+                <[u8; 4]>::try_from(&bytes[24..28]).map_err(|_| "Failed to parse target_ip")?,
+            );
 
             Ok(ArpPacket {
                 hardware_type,
@@ -105,11 +110,11 @@ mod arp {
     pub(super) struct Arp<'a>(pub(super) &'a mut IpIf);
 
     impl Arp<'_> {
-        pub(super) fn get_mac_addr(&self, ip: [u8; 4]) -> Option<&[u8; 6]> {
+        pub(super) fn get_mac_addr(&self, ip: IpAddr) -> Option<&[u8; 6]> {
             self.0.arp_table.get(&ip)
         }
 
-        pub(super) fn send_arp_request(&self, dest_ip: [u8; 4]) {
+        pub(super) fn send_arp_request(&self, dest_ip: IpAddr) {
             let arp_packet = ArpPacket::new(
                 ArpPacket::OP_REQUEST,
                 dest_ip,
@@ -123,7 +128,7 @@ mod arp {
             );
         }
 
-        fn send_arp_reply(&self, dest_mac: [u8; 6], dest_ip: [u8; 4], sender_ip: [u8; 4]) {
+        fn send_arp_reply(&self, dest_mac: [u8; 6], dest_ip: IpAddr, sender_ip: IpAddr) {
             let arp_packet = ArpPacket::new(
                 ArpPacket::OP_REPLY,
                 dest_ip,
@@ -177,19 +182,19 @@ mod arp {
 
                     match opcode {
                         ArpPacket::OP_REQUEST => {
-                            println!("{} req received from {:?}", self.dbg_header(), sender_ip);
+                            println!("{} req received from {}", self.dbg_header(), sender_ip);
                             if target_ip == self.0.ip_addr {
-                                println!("{} sending reply to {:?}", self.dbg_header(), sender_ip);
+                                println!("{} sending reply to {}", self.dbg_header(), sender_ip);
                                 self.send_arp_reply(sender_mac, sender_ip, self.0.ip_addr);
                             }
                         }
                         ArpPacket::OP_REPLY => {
-                            println!("{} reply received from {:?}", self.dbg_header(), sender_ip);
+                            println!("{} reply received from {}", self.dbg_header(), sender_ip);
                             return;
                         }
                         _ => {
                             eprintln!(
-                                "{} received from {:?} but invalid op code: {:#04x}",
+                                "{} received from {} but invalid op code: {:#04x}",
                                 self.dbg_header(),
                                 sender_ip,
                                 opcode
@@ -218,24 +223,83 @@ mod arp {
 use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::fmt::Display;
+use std::ops::Deref;
 
 use self::arp::{Arp, ArpPacket};
 use crate::node::DbgInfo;
 use crate::node::ether;
 use crate::node::ether::Ether;
 
+#[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
+pub(crate) struct IpAddr(pub(crate) [u8; 4]);
+
+impl IpAddr {
+    fn mask_with(&self, mask: Self) -> Self {
+        Self([
+            self[0] & mask[0],
+            self[1] & mask[1],
+            self[2] & mask[2],
+            self[3] & mask[3],
+        ])
+    }
+}
+
+impl Display for IpAddr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_fmt(format_args!(
+            "{}.{}.{}.{}",
+            self[0], self[1], self[2], self[3]
+        ))
+    }
+}
+
+impl Deref for IpAddr {
+    type Target = [u8; 4];
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl From<IpAddr> for [u8; 4] {
+    fn from(value: IpAddr) -> Self {
+        value.0
+    }
+}
+
+impl<'a> From<&'a IpAddr> for &'a [u8] {
+    fn from(value: &'a IpAddr) -> Self {
+        &value.0
+    }
+}
+
+pub(crate) struct Subnet {
+    nw_addr: IpAddr,
+    mask: IpAddr,
+}
+
+impl Subnet {
+    pub(crate) fn new(ip_addr: IpAddr, mask: IpAddr) -> Self {
+        let nw_addr = ip_addr.mask_with(mask);
+        Self { nw_addr, mask }
+    }
+
+    fn contains(&self, ip_addr: IpAddr) -> bool {
+        ip_addr.mask_with(self.mask) == self.nw_addr
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct Msg(pub(crate) Vec<u8>);
 
 pub(crate) struct IpIf {
-    pub(crate) ip_addr: [u8; 4],
-    arp_table: HashMap<[u8; 4], [u8; 6]>,
-    arp_wait_queue: VecDeque<([u8; 4], Vec<u8>)>,
+    pub(crate) ip_addr: IpAddr,
+    arp_table: HashMap<IpAddr, [u8; 6]>,
+    arp_wait_queue: VecDeque<(IpAddr, Vec<u8>)>,
     pub(crate) ether: Ether,
 }
 
 impl IpIf {
-    pub(crate) fn new(ip_addr: [u8; 4], ether: Ether) -> Self {
+    pub(crate) fn new(ip_addr: IpAddr, ether: Ether) -> Self {
         IpIf {
             ip_addr,
             arp_table: HashMap::new(),
@@ -291,10 +355,10 @@ impl IpIf {
         }
     }
 
-    fn send(&mut self, dest_ip: [u8; 4], data: &[u8]) {
+    fn send(&mut self, dest_ip: IpAddr, data: &[u8]) {
         if let Some(&mac_addr) = Arp(self).get_mac_addr(dest_ip) {
             println!(
-                "{} sending data to MAC addr: {:02x?} for IP: {:?}",
+                "{} sending data to MAC addr: {:02x?} for IP: {}",
                 self.dbg_header(),
                 mac_addr,
                 dest_ip
@@ -303,7 +367,7 @@ impl IpIf {
         } else {
             self.arp_wait_queue.push_back((dest_ip, data.into()));
             println!("{} saved send req temporarily", self.dbg_header());
-            println!("{} sending arp req to {:?}", self.dbg_header(), dest_ip);
+            println!("{} sending arp req to {}", self.dbg_header(), dest_ip);
             Arp(self).send_arp_request(dest_ip);
         }
     }
@@ -321,38 +385,18 @@ impl DbgInfo for IpIf {
     }
 }
 
-fn bytewise_and(a: [u8; 4], b: [u8; 4]) -> [u8; 4] {
-    [a[0] & b[0], a[1] & b[1], a[2] & b[2], a[3] & b[3]]
-}
-
-pub(crate) struct Subnet {
-    nw_addr: [u8; 4],
-    mask: [u8; 4],
-}
-
-impl Subnet {
-    pub(crate) fn new(ip_addr: [u8; 4], mask: [u8; 4]) -> Self {
-        let nw_addr = bytewise_and(ip_addr, mask);
-        Self { nw_addr, mask }
-    }
-
-    fn contains(&self, ip_addr: [u8; 4]) -> bool {
-        bytewise_and(ip_addr, self.mask) == self.nw_addr
-    }
-}
-
-struct RoutingTable(Vec<(Subnet, [u8; 4])>);
+struct RoutingTable(Vec<(Subnet, IpAddr)>);
 
 impl RoutingTable {
     fn new() -> Self {
         Self(Vec::new())
     }
 
-    fn add(&mut self, subnet: Subnet, ifip: [u8; 4]) {
+    fn add(&mut self, subnet: Subnet, ifip: IpAddr) {
         self.0.push((subnet, ifip));
     }
 
-    fn resolve(&self, ip_addr: [u8; 4]) -> Option<[u8; 4]> {
+    fn resolve(&self, ip_addr: IpAddr) -> Option<IpAddr> {
         self.0.iter().find_map(|(subnet, ifip)| {
             if subnet.contains(ip_addr) {
                 Some(*ifip)
@@ -376,7 +420,7 @@ impl Ip {
         }
     }
 
-    pub(crate) fn add_routing(&mut self, subnet: Subnet, ifip: [u8; 4]) {
+    pub(crate) fn add_routing(&mut self, subnet: Subnet, ifip: IpAddr) {
         self.routing_table.add(subnet, ifip);
     }
 
@@ -406,7 +450,7 @@ impl Ip {
         }
     }
 
-    pub(crate) fn send(&mut self, dest_ip: [u8; 4], data: &[u8]) {
+    pub(crate) fn send(&mut self, dest_ip: IpAddr, data: &[u8]) {
         if let Some(if_ip) = self.routing_table.resolve(dest_ip) {
             let ipif = self
                 .ifs
@@ -416,7 +460,7 @@ impl Ip {
             ipif.send(dest_ip, data);
         } else {
             panic!(
-                "{} failed to resolve routing to {:?}",
+                "{} failed to resolve routing to {}",
                 self.dbg_header(),
                 dest_ip
             )
