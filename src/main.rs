@@ -1,6 +1,6 @@
 mod node;
 
-use crate::node::ether::Ether;
+use crate::node::ether::{Ether, MacAddr};
 use crate::node::ip::{Ip, IpAddr, IpIf, Subnet};
 use crate::node::*;
 
@@ -20,7 +20,7 @@ fn main() {
     // Run nodes
     let handles = [
         node0.run(|mut node| {
-            let mac_addr = [0x02, 0, 0, 0, 0, node.id as u8];
+            let mac_addr = MacAddr([0x02, 0, 0, 0, 0, node.id as u8]);
             let ip_addr = IpAddr([192, 168, 77, node.id as u8]);
             let subnet = Subnet::new(ip_addr, IpAddr([255, 255, 255, 0]));
             let phy = node.phys.remove(&0).unwrap();
@@ -40,7 +40,7 @@ fn main() {
             // println!("Node#{:02} exiting.", node.id);
         }),
         node1.run(|mut node| {
-            let mac_addr = [0x02, 0, 0, 0, 0, node.id as u8];
+            let mac_addr = MacAddr([0x02, 0, 0, 0, 0, node.id as u8]);
             let ip_addr = IpAddr([192, 168, 77, node.id as u8]);
             let subnet = Subnet::new(ip_addr, IpAddr([255, 255, 255, 0]));
             let phy = node.phys.remove(&0).unwrap();

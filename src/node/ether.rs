@@ -1,18 +1,50 @@
 use std::collections::HashMap;
 use std::fmt::Display;
+use std::ops::Deref;
 
 use crate::node::DbgInfo;
 use crate::node::phy;
 use crate::node::phy::Phy;
 
+#[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
+pub(crate) struct MacAddr(pub(crate) [u8; 6]);
+
+impl Display for MacAddr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_fmt(format_args!(
+            "{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+            self[0], self[1], self[2], self[3], self[4], self[5]
+        ))
+    }
+}
+
+impl Deref for MacAddr {
+    type Target = [u8; 6];
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl From<MacAddr> for [u8; 6] {
+    fn from(value: MacAddr) -> Self {
+        value.0
+    }
+}
+
+impl<'a> From<&'a MacAddr> for &'a [u8] {
+    fn from(value: &'a MacAddr) -> Self {
+        &value.0
+    }
+}
+
 struct Header {
-    dst_mac: [u8; 6],
-    src_mac: [u8; 6],
+    dst_mac: MacAddr,
+    src_mac: MacAddr,
     ethertype: u16,
 }
 
 impl Header {
-    fn new(dst_mac: [u8; 6], src_mac: [u8; 6], ethertype: u16) -> Self {
+    fn new(dst_mac: MacAddr, src_mac: MacAddr, ethertype: u16) -> Self {
         Header {
             dst_mac,
             src_mac,
@@ -24,8 +56,8 @@ impl Header {
 impl From<Header> for Vec<u8> {
     fn from(header: Header) -> Self {
         let mut bytes = Vec::new();
-        bytes.extend_from_slice(&header.dst_mac);
-        bytes.extend_from_slice(&header.src_mac);
+        bytes.extend_from_slice(header.dst_mac.deref());
+        bytes.extend_from_slice(header.src_mac.deref());
         bytes.extend_from_slice(&header.ethertype.to_be_bytes());
         bytes
     }
@@ -39,8 +71,10 @@ impl TryFrom<&[u8]> for Header {
             return Err("Invalid Ethernet header length");
         }
 
-        let dst_mac = <[u8; 6]>::try_from(&bytes[0..6]).map_err(|_| "Failed to parse dst_mac")?;
-        let src_mac = <[u8; 6]>::try_from(&bytes[6..12]).map_err(|_| "Failed to parse src_mac")?;
+        let dst_mac =
+            MacAddr(<[u8; 6]>::try_from(&bytes[0..6]).map_err(|_| "Failed to parse dst_mac")?);
+        let src_mac =
+            MacAddr(<[u8; 6]>::try_from(&bytes[6..12]).map_err(|_| "Failed to parse src_mac")?);
         let ethertype = u16::from_be_bytes(
             <[u8; 2]>::try_from(&bytes[12..14]).map_err(|_| "Failed to parse ethertype")?,
         );
@@ -100,19 +134,19 @@ pub(crate) struct Msg {
 }
 
 pub(crate) struct Ether {
-    pub(crate) mac_addr: [u8; 6],
-    mac_addr_table: HashMap<[u8; 6], phy::PortId>,
+    pub(crate) mac_addr: MacAddr,
+    mac_addr_table: HashMap<MacAddr, phy::PortId>,
     pub(crate) phy: Phy,
 }
 
 impl Ether {
-    pub(crate) const MAC_ADDR_BROADCAST: [u8; 6] = [0xFF; 6];
+    pub(crate) const MAC_ADDR_BROADCAST: MacAddr = MacAddr([0xFF; 6]);
 
     pub(crate) const ETHERTYPE_IPV4: u16 = 0x0800;
     pub(crate) const ETHERTYPE_ARP: u16 = 0x0806;
     pub(crate) const ETHERTYPE_LOCAL1: u16 = 0x88B5;
 
-    pub(crate) fn new(mac_addr: [u8; 6], phy: Phy) -> Self {
+    pub(crate) fn new(mac_addr: MacAddr, phy: Phy) -> Self {
         Ether {
             mac_addr,
             mac_addr_table: HashMap::new(),
@@ -179,7 +213,7 @@ impl Ether {
 
         if header.dst_mac != self.mac_addr && header.dst_mac != Self::MAC_ADDR_BROADCAST {
             eprintln!(
-                "{} received frame not for this MAC on port {}: dst_mac={:?}",
+                "{} received frame not for this MAC on port {}: dst_mac={}",
                 self.dbg_header(),
                 port_id,
                 header.dst_mac
@@ -191,7 +225,7 @@ impl Ether {
         self.mac_addr_table.insert(header.src_mac, port_id);
 
         println!(
-            "{} received frame on port {}: dst_mac={:02X?}, src_mac={:02X?}, ethertype={:#X}, frame_len={}",
+            "{} received frame on port {}: dst_mac={}, src_mac={}, ethertype={:#X}, frame_len={}",
             self.dbg_header(),
             port_id,
             header.dst_mac,
@@ -206,7 +240,7 @@ impl Ether {
         })
     }
 
-    pub(crate) fn send(&self, dst_mac: [u8; 6], ethertype: u16, payload: &[u8]) {
+    pub(crate) fn send(&self, dst_mac: MacAddr, ethertype: u16, payload: &[u8]) {
         let header = Header::new(dst_mac, self.mac_addr, ethertype);
         let mut frame = Vec::new();
         frame.extend_from_slice(&Vec::from(header));
@@ -223,7 +257,7 @@ impl Ether {
         let port_id = self.mac_addr_table.get(&dst_mac);
 
         println!(
-            "{} sending frame on port {:?}: dst_mac={:02X?}, src_mac={:02X?}, ethertype={:#X}, frame_len={}",
+            "{} sending frame on port {:?}: dst_mac={}, src_mac={}, ethertype={:#X}, frame_len={}",
             self.dbg_header(),
             port_id,
             dst_mac,

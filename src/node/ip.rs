@@ -4,7 +4,7 @@ mod arp {
 
     use super::IpIf;
     use crate::node::DbgInfo;
-    use crate::node::ether::Ether;
+    use crate::node::ether::{Ether, MacAddr};
     use crate::node::ip::IpAddr;
 
     pub(super) struct ArpPacket {
@@ -13,9 +13,9 @@ mod arp {
         hardware_size: u8,
         protocol_size: u8,
         opcode: u16,
-        sender_mac: [u8; 6],
+        sender_mac: MacAddr,
         sender_ip: IpAddr,
-        target_mac: [u8; 6],
+        target_mac: MacAddr,
         target_ip: IpAddr,
     }
 
@@ -30,7 +30,7 @@ mod arp {
         pub(super) fn new(
             opcode: u16,
             dest_ip: IpAddr,
-            sender_mac: [u8; 6],
+            sender_mac: MacAddr,
             sender_ip: IpAddr,
         ) -> Self {
             ArpPacket {
@@ -41,7 +41,7 @@ mod arp {
                 opcode,
                 sender_mac,
                 sender_ip,
-                target_mac: [0; 6],
+                target_mac: MacAddr([0; 6]),
                 target_ip: dest_ip,
             }
         }
@@ -55,9 +55,9 @@ mod arp {
             bytes.push(packet.hardware_size);
             bytes.push(packet.protocol_size);
             bytes.extend_from_slice(&packet.opcode.to_be_bytes());
-            bytes.extend_from_slice(&packet.sender_mac);
+            bytes.extend_from_slice(packet.sender_mac.deref());
             bytes.extend_from_slice(packet.sender_ip.deref());
-            bytes.extend_from_slice(&packet.target_mac);
+            bytes.extend_from_slice(packet.target_mac.deref());
             bytes.extend_from_slice(packet.target_ip.deref());
             bytes
         }
@@ -82,13 +82,15 @@ mod arp {
             let opcode = u16::from_be_bytes(
                 <[u8; 2]>::try_from(&bytes[6..8]).map_err(|_| "Failed to parse opcode")?,
             );
-            let sender_mac =
-                <[u8; 6]>::try_from(&bytes[8..14]).map_err(|_| "Failed to parse sender_mac")?;
+            let sender_mac = MacAddr(
+                <[u8; 6]>::try_from(&bytes[8..14]).map_err(|_| "Failed to parse sender_mac")?,
+            );
             let sender_ip = IpAddr(
                 <[u8; 4]>::try_from(&bytes[14..18]).map_err(|_| "Failed to parse sender_ip")?,
             );
-            let target_mac =
-                <[u8; 6]>::try_from(&bytes[18..24]).map_err(|_| "Failed to parse target_mac")?;
+            let target_mac = MacAddr(
+                <[u8; 6]>::try_from(&bytes[18..24]).map_err(|_| "Failed to parse target_mac")?,
+            );
             let target_ip = IpAddr(
                 <[u8; 4]>::try_from(&bytes[24..28]).map_err(|_| "Failed to parse target_ip")?,
             );
@@ -110,7 +112,7 @@ mod arp {
     pub(super) struct Arp<'a>(pub(super) &'a mut IpIf);
 
     impl Arp<'_> {
-        pub(super) fn get_mac_addr(&self, ip: IpAddr) -> Option<&[u8; 6]> {
+        pub(super) fn get_mac_addr(&self, ip: IpAddr) -> Option<&MacAddr> {
             self.0.arp_table.get(&ip)
         }
 
@@ -128,7 +130,7 @@ mod arp {
             );
         }
 
-        fn send_arp_reply(&self, dest_mac: [u8; 6], dest_ip: IpAddr, sender_ip: IpAddr) {
+        fn send_arp_reply(&self, dest_mac: MacAddr, dest_ip: IpAddr, sender_ip: IpAddr) {
             let arp_packet = ArpPacket::new(
                 ArpPacket::OP_REPLY,
                 dest_ip,
@@ -228,7 +230,7 @@ use std::ops::Deref;
 use self::arp::{Arp, ArpPacket};
 use crate::node::DbgInfo;
 use crate::node::ether;
-use crate::node::ether::Ether;
+use crate::node::ether::{Ether, MacAddr};
 
 #[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
 pub(crate) struct IpAddr(pub(crate) [u8; 4]);
@@ -293,7 +295,7 @@ pub(crate) struct Msg(pub(crate) Vec<u8>);
 
 pub(crate) struct IpIf {
     pub(crate) ip_addr: IpAddr,
-    arp_table: HashMap<IpAddr, [u8; 6]>,
+    arp_table: HashMap<IpAddr, MacAddr>,
     arp_wait_queue: VecDeque<(IpAddr, Vec<u8>)>,
     pub(crate) ether: Ether,
 }
@@ -358,7 +360,7 @@ impl IpIf {
     fn send(&mut self, dest_ip: IpAddr, data: &[u8]) {
         if let Some(&mac_addr) = Arp(self).get_mac_addr(dest_ip) {
             println!(
-                "{} sending data to MAC addr: {:02x?} for IP: {}",
+                "{} sending data to MAC addr: {} for IP: {}",
                 self.dbg_header(),
                 mac_addr,
                 dest_ip
