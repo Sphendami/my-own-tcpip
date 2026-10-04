@@ -272,7 +272,7 @@ impl IpIf {
                 Arp(self).handle(&data[0..ArpPacket::U8_REPR_SIZE]);
                 while let Some((header, data)) = self.arp_wait_queue.pop_front() {
                     println!("{} re-sending saved req", self.dbg_header());
-                    self.send(header, &data);
+                    self.send(NextHop::Direct, header, &data);
                 }
                 return None;
             }
@@ -309,29 +309,32 @@ impl IpIf {
         }
     }
 
-    fn send(&mut self, header: IpV4Header, data: &[u8]) {
-        if let Some(&mac_addr) = Arp(self).get_mac_addr(header.dest_ip) {
+    fn send(&mut self, next_hop: NextHop, header: IpV4Header, data: &[u8]) {
+        let next_ip = match next_hop {
+            NextHop::Direct => header.dest_ip,
+            NextHop::Indirect(ip) => ip,
+        };
+        if let Some(&mac_addr) = Arp(self).get_mac_addr(next_ip) {
             println!(
                 "{} sending data to MAC addr: {} for IP: {}",
                 self.dbg_header(),
                 mac_addr,
-                header.dest_ip
+                next_ip
             );
             let data = [&<Vec<u8>>::from(&header), data].concat();
             self.ether.send(mac_addr, Ether::ETHERTYPE_IPV4, &data);
         } else {
-            let dest_ip = header.dest_ip;
             self.arp_wait_queue.push_back((header, data.into()));
             println!("{} saved send req temporarily", self.dbg_header());
-            println!("{} sending arp req to {}", self.dbg_header(), dest_ip);
-            Arp(self).send_arp_request(dest_ip);
+            println!("{} sending arp req to {}", self.dbg_header(), next_ip);
+            Arp(self).send_arp_request(next_ip);
         }
     }
 }
 
 impl Display for IpIf {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "IP-IF")
+        write!(f, "IP#{}.{}", self.ip_addr.0[2], self.ip_addr.0[3])
     }
 }
 
@@ -341,21 +344,27 @@ impl DbgInfo for IpIf {
     }
 }
 
-struct RoutingTable(Vec<(Subnet, IpAddr)>);
+#[derive(Clone, Copy)]
+pub(crate) enum NextHop {
+    Direct,
+    Indirect(IpAddr),
+}
+
+struct RoutingTable(Vec<(Subnet, NextHop, IpAddr)>);
 
 impl RoutingTable {
     fn new() -> Self {
         Self(Vec::new())
     }
 
-    fn add(&mut self, subnet: Subnet, ifip: IpAddr) {
-        self.0.push((subnet, ifip));
+    fn add(&mut self, subnet: Subnet, next_hop: NextHop, ifip: IpAddr) {
+        self.0.push((subnet, next_hop, ifip));
     }
 
-    fn resolve(&self, ip_addr: IpAddr) -> Option<IpAddr> {
-        self.0.iter().find_map(|(subnet, ifip)| {
+    fn resolve(&self, ip_addr: IpAddr) -> Option<(NextHop, IpAddr)> {
+        self.0.iter().find_map(|(subnet, next_hop, ifip)| {
             if subnet.contains(ip_addr) {
-                Some(*ifip)
+                Some((*next_hop, *ifip))
             } else {
                 None
             }
@@ -379,13 +388,16 @@ impl Ip {
         }
     }
 
-    pub(crate) fn add_routing(&mut self, subnet: Subnet, ifip: IpAddr) {
-        self.routing_table.add(subnet, ifip);
+    pub(crate) fn add_routing(&mut self, subnet: Subnet, next_hop: NextHop, ifip: IpAddr) {
+        self.routing_table.add(subnet, next_hop, ifip);
     }
 
-    fn resolve_routing_mut(&mut self, dest_ip: IpAddr) -> Option<&mut IpIf> {
-        let if_ip = self.routing_table.resolve(dest_ip)?;
-        self.ifs.iter_mut().find(|ipif| ipif.ip_addr == if_ip)
+    fn resolve_routing_mut(&mut self, dest_ip: IpAddr) -> Option<(&mut IpIf, NextHop)> {
+        let (next_hop, if_ip) = self.routing_table.resolve(dest_ip)?;
+        self.ifs
+            .iter_mut()
+            .find(|ipif| ipif.ip_addr == if_ip)
+            .map(|ipif| (ipif, next_hop))
     }
 
     fn is_my_ip(&self, ip_addr: IpAddr) -> bool {
@@ -443,18 +455,18 @@ impl Ip {
     }
 
     pub(crate) fn send(&mut self, protocol: u8, dest_ip: IpAddr, data: &[u8]) {
-        let ipif = self
+        let (ipif, next_hop) = self
             .resolve_routing_mut(dest_ip)
             .expect(&format!("failed to resolve routing to {}", dest_ip));
         let header = IpV4Header::new(ipif.ip_addr, dest_ip, protocol, data.len() as u16);
-        ipif.send(header, data);
+        ipif.send(next_hop, header, data);
     }
 
     fn send_with_header(&mut self, header: IpV4Header, data: &[u8]) {
-        let ipif = self
+        let (ipif, next_hop) = self
             .resolve_routing_mut(header.dest_ip)
             .expect(&format!("failed to resolve routing to {}", header.dest_ip));
-        ipif.send(header, data);
+        ipif.send(next_hop, header, data);
     }
 }
 

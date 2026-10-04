@@ -1,7 +1,7 @@
 mod node;
 
 use crate::node::ether::{Ether, MacAddr};
-use crate::node::ip::{Ip, IpAddr, IpIf, Subnet};
+use crate::node::ip::{Ip, IpAddr, IpIf, NextHop, Subnet};
 use crate::node::*;
 
 fn main() {
@@ -27,7 +27,7 @@ fn main() {
             let ether = Ether::new(mac_addr, phy);
             let ipif = IpIf::new(ip_addr, ether);
             let mut ip = Ip::new(vec![ipif]);
-            ip.add_routing(subnet, ip_addr);
+            ip.add_routing(subnet, NextHop::Direct, ip_addr);
 
             loop {
                 let ip::Msg(data) = ip.recv();
@@ -47,7 +47,7 @@ fn main() {
             let ether = Ether::new(mac_addr, phy);
             let ipif = IpIf::new(ip_addr, ether);
             let mut ip = Ip::new(vec![ipif]);
-            ip.add_routing(subnet, ip_addr);
+            ip.add_routing(subnet, NextHop::Direct, ip_addr);
 
             let payload = vec![0, 1, 2, 3];
 
