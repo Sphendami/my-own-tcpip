@@ -24,6 +24,11 @@ fn main() {
     let phy = node3.add_phy(0).unwrap();
     phy.add_port(1).unwrap();
     phy.add_port(2).unwrap();
+    phy.add_port(4).unwrap();
+
+    let mut node4 = Node::new(4);
+    let phy = node4.add_phy(0).unwrap();
+    phy.add_port(0).unwrap();
 
     // Connect ports
     let n0p0_0 = node0.get_port_mut(0, 0).unwrap();
@@ -35,6 +40,9 @@ fn main() {
     let n3p0_2 = node3.get_port_mut(0, 2).unwrap();
     let n2p0_0 = node2.get_port_mut(0, 0).unwrap();
     n3p0_2.connect(n2p0_0).unwrap();
+    let n3p0_4 = node3.get_port_mut(0, 4).unwrap();
+    let n4p0_0 = node4.get_port_mut(0, 0).unwrap();
+    n3p0_4.connect(n4p0_0).unwrap();
 
     let subnet77 = Subnet::new(IpAddr([192, 168, 77, 0]), IpAddr([255, 255, 255, 0]));
     let subnet78 = Subnet::new(IpAddr([192, 168, 78, 0]), IpAddr([255, 255, 255, 0]));
@@ -42,6 +50,7 @@ fn main() {
     let node1_77_ip = IpAddr([192, 168, 77, 1]);
     let node1_78_ip = IpAddr([192, 168, 78, 1]);
     let node2_ip = IpAddr([192, 168, 78, 2]);
+    let node4_ip = IpAddr([192, 168, 78, 4]);
 
     // Run nodes
     let handles = [
@@ -58,8 +67,8 @@ fn main() {
                 let ip::Msg(data) = ip.recv();
                 println!("Node#{:02} received: {:02X?}", node.id, data);
 
-                println!("Node#{:02} sending back", node.id);
-                ip.send(Ip::IP_PROTOCOL_UDP, node2_ip, &data);
+                println!("Node#{:02} sending back to {}", node.id, node4_ip);
+                ip.send(Ip::IP_PROTOCOL_UDP, node4_ip, &data);
             }
 
             // println!("Node#{:02} exiting.", node.id);
@@ -116,6 +125,22 @@ fn main() {
             loop {
                 let msg = ether.recv();
                 println!("Node#{:02} received: {:02X?}", node.id, msg);
+            }
+
+            // println!("Node#{:02} exiting.", node.id);
+        }),
+        node4.run(move |mut node| {
+            let mac_addr = MacAddr([0x02, 0, 0, 0, 0, node.id as u8]);
+            let phy = node.phys.remove(&0).unwrap();
+            let ether = Ether::new(mac_addr, phy);
+            let ipif = IpIf::new(node4_ip, ether);
+            let mut ip = Ip::new(vec![ipif]);
+            ip.add_routing(subnet77, NextHop::Indirect(node1_78_ip), node4_ip);
+            ip.add_routing(subnet78, NextHop::Direct, node4_ip);
+
+            loop {
+                let ip::Msg(data) = ip.recv();
+                println!("Node#{:02} received: {:02X?}", node.id, data);
             }
 
             // println!("Node#{:02} exiting.", node.id);
