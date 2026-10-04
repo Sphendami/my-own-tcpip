@@ -128,6 +128,7 @@ mod test {
     }
 }
 
+#[derive(Debug)]
 pub(crate) struct Msg {
     pub(crate) ether_type: u16,
     pub(crate) data: Vec<u8>,
@@ -151,6 +152,19 @@ impl Ether {
             mac_addr,
             mac_addr_table: HashMap::new(),
             phy,
+        }
+    }
+
+    fn resolve_port_ids(&self, dst_mac: MacAddr, except: Option<phy::PortId>) -> Vec<phy::PortId> {
+        match self.mac_addr_table.get(&dst_mac) {
+            Some(&port_id) => vec![port_id],
+            // flooding except the port it came from
+            None => self
+                .phy
+                .port_ids()
+                .into_iter()
+                .filter(|&id| Some(id) != except)
+                .collect(),
         }
     }
 
@@ -211,16 +225,6 @@ impl Ether {
             return None;
         }
 
-        if header.dst_mac != self.mac_addr && header.dst_mac != Self::MAC_ADDR_BROADCAST {
-            eprintln!(
-                "{} received frame not for this MAC on port {}: dst_mac={}",
-                self.dbg_header(),
-                port_id,
-                header.dst_mac
-            );
-            return None;
-        }
-
         // Update MAC address table
         self.mac_addr_table.insert(header.src_mac, port_id);
 
@@ -234,10 +238,30 @@ impl Ether {
             frame.len()
         );
 
-        Some(Msg {
-            ether_type: header.ethertype,
-            data: payload.to_vec(),
-        })
+        if header.dst_mac != self.mac_addr || header.dst_mac == Self::MAC_ADDR_BROADCAST {
+            // forward the frame (except the port it came from)
+            let fwd_port_ids = self.resolve_port_ids(header.dst_mac, Some(port_id));
+            if fwd_port_ids.len() != 0 {
+                println!(
+                    "{} forwarding the frame on port {:?}",
+                    self.dbg_header(),
+                    fwd_port_ids,
+                );
+            }
+
+            for fwd_port_id in fwd_port_ids {
+                self.phy.send(fwd_port_id, frame.clone());
+            }
+        }
+
+        if header.dst_mac == self.mac_addr || header.dst_mac == Self::MAC_ADDR_BROADCAST {
+            Some(Msg {
+                ether_type: header.ethertype,
+                data: payload.to_vec(),
+            })
+        } else {
+            None
+        }
     }
 
     pub(crate) fn send(&self, dst_mac: MacAddr, ethertype: u16, payload: &[u8]) {
@@ -254,23 +278,28 @@ impl Ether {
         let crc = crc32(&frame);
         frame.extend_from_slice(&crc.to_be_bytes());
 
-        let port_id = self.mac_addr_table.get(&dst_mac);
+        let port_ids = self.resolve_port_ids(dst_mac, None);
+        if port_ids.len() == 0 {
+            eprintln!(
+                "{} no port found for dst_mac={} (ignore the send)",
+                self.dbg_header(),
+                dst_mac
+            );
+            return;
+        }
 
         println!(
             "{} sending frame on port {:?}: dst_mac={}, src_mac={}, ethertype={:#X}, frame_len={}",
             self.dbg_header(),
-            port_id,
+            port_ids,
             dst_mac,
             self.mac_addr,
             ethertype,
             frame.len()
         );
 
-        if let Some(&port_id) = port_id {
-            self.phy.send(port_id, frame);
-        } else {
-            // Flooding
-            self.phy.send_to_all(frame);
+        for port_id in port_ids {
+            self.phy.send(port_id, frame.clone());
         }
     }
 }

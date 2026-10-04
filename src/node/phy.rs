@@ -147,6 +147,10 @@ impl Phy {
         Some(self.ports.get_mut(&id).unwrap())
     }
 
+    pub(crate) fn port_ids(&self) -> Vec<PortId> {
+        self.ports.keys().copied().collect()
+    }
+
     pub(crate) fn try_recv(&self) -> Option<Msg> {
         self.rx.try_recv().ok()
     }
@@ -165,13 +169,6 @@ impl Phy {
                 self.dbg_header(),
                 port_id
             );
-        }
-    }
-
-    pub(crate) fn send_to_all(&self, data: Vec<u8>) {
-        for port in self.ports.values() {
-            port.send(data.clone())
-                .unwrap_or_else(|e| eprintln!("{} (ignore the send)", e));
         }
     }
 }

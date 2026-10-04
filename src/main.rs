@@ -20,13 +20,21 @@ fn main() {
     let phy = node2.add_phy(0).unwrap();
     phy.add_port(0).unwrap();
 
+    let mut node3 = Node::new(3);
+    let phy = node3.add_phy(0).unwrap();
+    phy.add_port(1).unwrap();
+    phy.add_port(2).unwrap();
+
     // Connect ports
     let n0p0_0 = node0.get_port_mut(0, 0).unwrap();
     let n1p0_0 = node1.get_port_mut(0, 0).unwrap();
     n0p0_0.connect(n1p0_0).unwrap();
     let n1p1_0 = node1.get_port_mut(1, 0).unwrap();
+    let n3p0_1 = node3.get_port_mut(0, 1).unwrap();
+    n1p1_0.connect(n3p0_1).unwrap();
+    let n3p0_2 = node3.get_port_mut(0, 2).unwrap();
     let n2p0_0 = node2.get_port_mut(0, 0).unwrap();
-    n1p1_0.connect(n2p0_0).unwrap();
+    n3p0_2.connect(n2p0_0).unwrap();
 
     let subnet77 = Subnet::new(IpAddr([192, 168, 77, 0]), IpAddr([255, 255, 255, 0]));
     let subnet78 = Subnet::new(IpAddr([192, 168, 78, 0]), IpAddr([255, 255, 255, 0]));
@@ -96,6 +104,18 @@ fn main() {
             loop {
                 let ip::Msg(data) = ip.recv();
                 println!("Node#{:02} received: {:02X?}", node.id, data);
+            }
+
+            // println!("Node#{:02} exiting.", node.id);
+        }),
+        node3.run(move |mut node| {
+            let mac_addr = MacAddr([0x02, 0, 0, 0, 0, node.id as u8]);
+            let phy = node.phys.remove(&0).unwrap();
+            let mut ether = Ether::new(mac_addr, phy);
+
+            loop {
+                let msg = ether.recv();
+                println!("Node#{:02} received: {:02X?}", node.id, msg);
             }
 
             // println!("Node#{:02} exiting.", node.id);
