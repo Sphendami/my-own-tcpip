@@ -30,6 +30,14 @@ impl Node {
         Some(self.phys.get_mut(&id).unwrap())
     }
 
+    pub(crate) fn get_port_mut(
+        &mut self,
+        phy_id: phy::Id,
+        port_id: phy::PortId,
+    ) -> Option<&mut phy::Port> {
+        self.phys.get_mut(&phy_id)?.ports.get_mut(&port_id)
+    }
+
     pub(crate) fn run(self, f: impl FnOnce(Node) + Send + 'static) -> thread::JoinHandle<()> {
         thread::spawn(move || f(self))
     }

@@ -183,6 +183,13 @@ impl Arp<'_> {
                         if target_ip == self.0.ip_addr {
                             println!("{} sending reply to {}", self.dbg_header(), sender_ip);
                             self.send_arp_reply(sender_mac, sender_ip, self.0.ip_addr);
+                        } else {
+                            eprintln!(
+                                "{} received request for {} but my IP is {}. dropping request.",
+                                self.dbg_header(),
+                                target_ip,
+                                self.0.ip_addr
+                            );
                         }
                     }
                     ArpPacket::OP_REPLY => {

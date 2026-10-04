@@ -52,6 +52,7 @@ impl<'a> From<&'a IpAddr> for &'a [u8] {
     }
 }
 
+#[derive(Clone, Copy)]
 pub(crate) struct Subnet {
     nw_addr: IpAddr,
     mask: IpAddr,
@@ -232,7 +233,7 @@ pub(crate) struct IpIfMsg(IpV4Header, Vec<u8>);
 pub(crate) struct IpIf {
     pub(crate) ip_addr: IpAddr,
     arp_table: HashMap<IpAddr, MacAddr>,
-    arp_wait_queue: VecDeque<(IpV4Header, Vec<u8>)>,
+    arp_wait_queue: VecDeque<(NextHop, IpV4Header, Vec<u8>)>,
     pub(crate) ether: Ether,
 }
 
@@ -270,9 +271,9 @@ impl IpIf {
         match ether_type {
             Ether::ETHERTYPE_ARP => {
                 Arp(self).handle(&data[0..ArpPacket::U8_REPR_SIZE]);
-                while let Some((header, data)) = self.arp_wait_queue.pop_front() {
+                while let Some((next_hop, header, data)) = self.arp_wait_queue.pop_front() {
                     println!("{} re-sending saved req", self.dbg_header());
-                    self.send(NextHop::Direct, header, &data);
+                    self.send(next_hop, header, &data);
                 }
                 return None;
             }
@@ -324,7 +325,8 @@ impl IpIf {
             let data = [&<Vec<u8>>::from(&header), data].concat();
             self.ether.send(mac_addr, Ether::ETHERTYPE_IPV4, &data);
         } else {
-            self.arp_wait_queue.push_back((header, data.into()));
+            self.arp_wait_queue
+                .push_back((next_hop, header, data.into()));
             println!("{} saved send req temporarily", self.dbg_header());
             println!("{} sending arp req to {}", self.dbg_header(), next_ip);
             Arp(self).send_arp_request(next_ip);
