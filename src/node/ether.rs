@@ -144,7 +144,7 @@ impl Ether {
 
     pub(crate) const ETHERTYPE_IPV4: u16 = 0x0800;
     pub(crate) const ETHERTYPE_ARP: u16 = 0x0806;
-    pub(crate) const ETHERTYPE_LOCAL1: u16 = 0x88B5;
+    // pub(crate) const ETHERTYPE_LOCAL1: u16 = 0x88B5;
 
     pub(crate) fn new(mac_addr: MacAddr, phy: Phy) -> Self {
         Ether {

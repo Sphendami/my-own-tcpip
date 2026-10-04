@@ -68,13 +68,171 @@ impl Subnet {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct IpV4Header {
+    version: u8,
+    ihl: u8,  // Internet Header Length
+    dscp: u8, // Differentiated Services Code Point
+    ecn: u8,  // Explicit Congestion Notification
+    total_length: u16,
+    identification: u16,
+    dont_fragment: bool,
+    more_fragments: bool,
+    fragment_offset: u16,
+    ttl: u8, // Time to Live
+    protocol: u8,
+    checksum: u16,
+    source_ip: IpAddr,
+    dest_ip: IpAddr,
+}
+
+impl IpV4Header {
+    const U8_REPR_SIZE: u16 = 20;
+
+    fn new(source_ip: IpAddr, dest_ip: IpAddr, protocol: u8, payload_size: u16) -> Self {
+        let total_length = Self::U8_REPR_SIZE + payload_size;
+        let mut header = Self {
+            version: 4,
+            ihl: 5, // 5 * 4 = 20 bytes
+            dscp: 0,
+            ecn: 0,
+            total_length,
+            identification: 0, // For simplicity, set to 0
+            dont_fragment: true,
+            more_fragments: false,
+            fragment_offset: 0,
+            ttl: 64, // Default TTL
+            protocol,
+            checksum: 0,
+            source_ip,
+            dest_ip,
+        };
+        header.set_checksum();
+        header
+    }
+
+    fn calc_checksum(&self) -> u16 {
+        let mut sum: u32 = <Vec<u8>>::from(self)
+            .chunks(2)
+            .map(|chunk| u16::from_be_bytes([chunk[0], chunk[1]]) as u32)
+            .sum();
+
+        // Add carry bits
+        while (sum >> 16) != 0 {
+            sum = (sum & 0xffff) + (sum >> 16);
+        }
+
+        (!sum) as u16
+    }
+
+    fn set_checksum(&mut self) {
+        // checksum field must be zeroed before calculating the checksum
+        self.checksum = 0;
+        self.checksum = self.calc_checksum();
+    }
+
+    fn decrease_ttl(&mut self) -> bool {
+        if self.ttl > 0 {
+            self.ttl -= 1;
+            self.set_checksum();
+            true
+        } else {
+            false
+        }
+    }
+}
+
+impl From<&IpV4Header> for Vec<u8> {
+    fn from(header: &IpV4Header) -> Self {
+        let mut bytes = Vec::new();
+        let version_ihl = (header.version << 4) | (header.ihl & 0x0F);
+        bytes.push(version_ihl);
+        let dscp_ecn = (header.dscp << 2) | (header.ecn & 0x03);
+        bytes.push(dscp_ecn);
+        bytes.extend_from_slice(&header.total_length.to_be_bytes());
+        bytes.extend_from_slice(&header.identification.to_be_bytes());
+        let flags_fragment_offset = ((header.dont_fragment as u16) << 14)
+            | ((header.more_fragments as u16) << 13)
+            | (header.fragment_offset & 0x1FFF);
+        bytes.extend_from_slice(&flags_fragment_offset.to_be_bytes());
+        bytes.push(header.ttl);
+        bytes.push(header.protocol);
+        bytes.extend_from_slice(&header.checksum.to_be_bytes());
+        bytes.extend_from_slice(header.source_ip.deref());
+        bytes.extend_from_slice(header.dest_ip.deref());
+        bytes
+    }
+}
+
+impl TryFrom<&[u8]> for IpV4Header {
+    type Error = &'static str;
+
+    fn try_from(bytes: &[u8]) -> Result<Self, Self::Error> {
+        if bytes.len() < IpV4Header::U8_REPR_SIZE as usize {
+            return Err("IPv4 header must be at least 20 bytes");
+        }
+        let version_ihl = bytes[0];
+        let dscp_ecn = bytes[1];
+        let flags_fragment_offset = u16::from_be_bytes([bytes[6], bytes[7]]);
+
+        Ok(IpV4Header {
+            version: version_ihl >> 4,
+            ihl: version_ihl & 0x0F,
+            dscp: dscp_ecn >> 2,
+            ecn: dscp_ecn & 0x03,
+            total_length: u16::from_be_bytes([bytes[2], bytes[3]]),
+            identification: u16::from_be_bytes([bytes[4], bytes[5]]),
+            dont_fragment: (flags_fragment_offset >> 14) & 1 == 1,
+            more_fragments: (flags_fragment_offset >> 13) & 1 == 1,
+            fragment_offset: flags_fragment_offset & 0x1FFF,
+            ttl: bytes[8],
+            protocol: bytes[9],
+            checksum: u16::from_be_bytes([bytes[10], bytes[11]]),
+            source_ip: IpAddr([bytes[12], bytes[13], bytes[14], bytes[15]]),
+            dest_ip: IpAddr([bytes[16], bytes[17], bytes[18], bytes[19]]),
+        })
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_ip_header_serdes() {
+        let source_ip = IpAddr([192, 168, 1, 1]);
+        let dest_ip = IpAddr([192, 168, 1, 2]);
+        let protocol = Ip::IP_PROTOCOL_UDP;
+        let total_length = 40; // Example length
+
+        let header = IpV4Header::new(source_ip, dest_ip, protocol, total_length);
+        let bytes: Vec<u8> = (&header).into();
+
+        let deserialized_header = IpV4Header::try_from(bytes.as_slice()).unwrap();
+        assert_eq!(header, deserialized_header);
+    }
+
+    #[test]
+    fn test_ip_header_checksum() {
+        let source_ip = IpAddr([192, 168, 1, 1]);
+        let dest_ip = IpAddr([192, 168, 1, 2]);
+        let protocol = Ip::IP_PROTOCOL_UDP;
+        let total_length = 40; // Example length
+
+        let header = IpV4Header::new(source_ip, dest_ip, protocol, total_length);
+        assert_eq!(header.calc_checksum(), 0);
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct Msg(pub(crate) Vec<u8>);
+
+pub(crate) struct IpIfMsg(IpV4Header, Vec<u8>);
 
 pub(crate) struct IpIf {
     pub(crate) ip_addr: IpAddr,
     arp_table: HashMap<IpAddr, MacAddr>,
-    arp_wait_queue: VecDeque<(IpAddr, Vec<u8>)>,
+    arp_wait_queue: VecDeque<(IpV4Header, Vec<u8>)>,
     pub(crate) ether: Ether,
 }
 
@@ -88,7 +246,7 @@ impl IpIf {
         }
     }
 
-    fn try_recv(&mut self) -> Option<Msg> {
+    fn try_recv(&mut self) -> Option<IpIfMsg> {
         loop {
             let msg = self.ether.try_recv()?;
             if let Some(msg) = self.handle(msg) {
@@ -98,7 +256,7 @@ impl IpIf {
     }
 
     #[allow(dead_code)]
-    fn recv(&mut self) -> Msg {
+    fn recv(&mut self) -> IpIfMsg {
         loop {
             let msg = self.ether.recv();
             if let Some(msg) = self.handle(msg) {
@@ -107,22 +265,38 @@ impl IpIf {
         }
     }
 
-    fn handle(&mut self, msg: ether::Msg) -> Option<Msg> {
+    fn handle(&mut self, msg: ether::Msg) -> Option<IpIfMsg> {
         let ether::Msg { ether_type, data } = msg;
         match ether_type {
             Ether::ETHERTYPE_ARP => {
                 Arp(self).handle(&data[0..ArpPacket::U8_REPR_SIZE]);
-                while let Some((dest_ip, data)) = self.arp_wait_queue.pop_front() {
+                while let Some((header, data)) = self.arp_wait_queue.pop_front() {
                     println!("{} re-sending saved req", self.dbg_header());
-                    self.send(dest_ip, &data);
+                    self.send(header, &data);
                 }
                 return None;
             }
             Ether::ETHERTYPE_IPV4 => {
-                todo!("{} received IPv4 packet: {:02x?}", self.dbg_header(), data);
-            }
-            Ether::ETHERTYPE_LOCAL1 => {
-                return Some(Msg(data));
+                let h_len = IpV4Header::U8_REPR_SIZE as usize;
+                match IpV4Header::try_from(&data[0..h_len]) {
+                    Err(e) => {
+                        eprintln!("{} failed to parse IPv4 header: {}", self.dbg_header(), e);
+                        return None;
+                    }
+                    Ok(header) => {
+                        // drop the header and padding bytes
+                        let payload = data[h_len..header.total_length as usize].to_vec();
+                        println!(
+                            "{} received packet: src_ip={}, dest_ip={}, protocol=0x{:02x}, len={}",
+                            self.dbg_header(),
+                            header.source_ip,
+                            header.dest_ip,
+                            header.protocol,
+                            payload.len()
+                        );
+                        Some(IpIfMsg(header, payload))
+                    }
+                }
             }
             _ => {
                 eprintln!(
@@ -135,17 +309,19 @@ impl IpIf {
         }
     }
 
-    fn send(&mut self, dest_ip: IpAddr, data: &[u8]) {
-        if let Some(&mac_addr) = Arp(self).get_mac_addr(dest_ip) {
+    fn send(&mut self, header: IpV4Header, data: &[u8]) {
+        if let Some(&mac_addr) = Arp(self).get_mac_addr(header.dest_ip) {
             println!(
                 "{} sending data to MAC addr: {} for IP: {}",
                 self.dbg_header(),
                 mac_addr,
-                dest_ip
+                header.dest_ip
             );
-            self.ether.send(mac_addr, Ether::ETHERTYPE_IPV4, data);
+            let data = [&<Vec<u8>>::from(&header), data].concat();
+            self.ether.send(mac_addr, Ether::ETHERTYPE_IPV4, &data);
         } else {
-            self.arp_wait_queue.push_back((dest_ip, data.into()));
+            let dest_ip = header.dest_ip;
+            self.arp_wait_queue.push_back((header, data.into()));
             println!("{} saved send req temporarily", self.dbg_header());
             println!("{} sending arp req to {}", self.dbg_header(), dest_ip);
             Arp(self).send_arp_request(dest_ip);
@@ -193,6 +369,9 @@ pub(crate) struct Ip {
 }
 
 impl Ip {
+    // pub(crate) const IP_PROTOCOL_TCP: u8 = 0x06;
+    pub(crate) const IP_PROTOCOL_UDP: u8 = 0x11;
+
     pub(crate) fn new(ifs: Vec<IpIf>) -> Self {
         Self {
             ifs,
@@ -204,47 +383,78 @@ impl Ip {
         self.routing_table.add(subnet, ifip);
     }
 
+    fn resolve_routing_mut(&mut self, dest_ip: IpAddr) -> Option<&mut IpIf> {
+        let if_ip = self.routing_table.resolve(dest_ip)?;
+        self.ifs.iter_mut().find(|ipif| ipif.ip_addr == if_ip)
+    }
+
+    fn is_my_ip(&self, ip_addr: IpAddr) -> bool {
+        self.ifs.iter().any(|ipif| ipif.ip_addr == ip_addr)
+    }
+
     #[allow(dead_code)]
     pub(crate) fn try_recv(&mut self) -> Option<Msg> {
-        for ipif in self.ifs.iter_mut() {
-            let msg = ipif.try_recv();
-            if msg.is_some() {
-                return msg;
-            }
-            // if None, continue to the next ipif
+        let len = self.ifs.len();
+        for i in 0..len {
+            let Some(msg) = self.ifs[i].try_recv() else {
+                continue;
+            };
+            let Some(msg) = self.handle(msg) else {
+                continue;
+            };
+            return Some(msg);
         }
         // All None. Give up
         None
     }
 
     pub(crate) fn recv(&mut self) -> Msg {
-        loop {
-            for ipif in self.ifs.iter_mut() {
-                let msg = ipif.try_recv(); // non-blocking check
-                if let Some(msg) = msg {
-                    return msg;
-                }
-                // if None, continue to the next ipif
+        let len = self.ifs.len();
+        // loop forever
+        for i in (0..len).cycle() {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+            let Some(msg) = self.ifs[i].try_recv() else {
+                continue;
+            };
+            let Some(msg) = self.handle(msg) else {
+                continue;
+            };
+            return msg;
+        }
+        unreachable!()
+    }
+
+    fn handle(&mut self, msg: IpIfMsg) -> Option<Msg> {
+        let IpIfMsg(mut header, data) = msg;
+        if self.is_my_ip(header.dest_ip) {
+            println!("{} the packet is for me", self.dbg_header());
+            return Some(Msg(data));
+        } else {
+            // Not for me. Forward it.
+            let decreased = header.decrease_ttl();
+            if !decreased {
+                eprintln!("{} received packet with TTL=0, dropping", self.dbg_header());
+                return None;
             }
-            // All None. Retry forever
+            println!("{} forwarding the packet", self.dbg_header());
+            self.send_with_header(header, &data);
+            return None;
         }
     }
 
-    pub(crate) fn send(&mut self, dest_ip: IpAddr, data: &[u8]) {
-        if let Some(if_ip) = self.routing_table.resolve(dest_ip) {
-            let ipif = self
-                .ifs
-                .iter_mut()
-                .find(|ipif| ipif.ip_addr == if_ip)
-                .unwrap();
-            ipif.send(dest_ip, data);
-        } else {
-            panic!(
-                "{} failed to resolve routing to {}",
-                self.dbg_header(),
-                dest_ip
-            )
-        }
+    pub(crate) fn send(&mut self, protocol: u8, dest_ip: IpAddr, data: &[u8]) {
+        let ipif = self
+            .resolve_routing_mut(dest_ip)
+            .expect(&format!("failed to resolve routing to {}", dest_ip));
+        let header = IpV4Header::new(ipif.ip_addr, dest_ip, protocol, data.len() as u16);
+        ipif.send(header, data);
+    }
+
+    fn send_with_header(&mut self, header: IpV4Header, data: &[u8]) {
+        let ipif = self
+            .resolve_routing_mut(header.dest_ip)
+            .expect(&format!("failed to resolve routing to {}", header.dest_ip));
+        ipif.send(header, data);
     }
 }
 

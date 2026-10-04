@@ -34,7 +34,7 @@ fn main() {
                 println!("Node#{:02} received: {:02X?}", node.id, data);
 
                 println!("Node#{:02} sending back", node.id);
-                ip.send(IpAddr([192, 168, 77, 1]), &data);
+                ip.send(Ip::IP_PROTOCOL_UDP, IpAddr([192, 168, 77, 1]), &data);
             }
 
             // println!("Node#{:02} exiting.", node.id);
@@ -51,10 +51,9 @@ fn main() {
 
             let payload = vec![0, 1, 2, 3];
 
+            println!("Node#{:02} sending: {:02X?}", node.id, payload);
+            ip.send(Ip::IP_PROTOCOL_UDP, IpAddr([192, 168, 77, 0]), &payload);
             loop {
-                println!("Node#{:02} sending: {:02X?}", node.id, payload);
-                ip.send(IpAddr([192, 168, 77, 0]), &payload);
-
                 let ip::Msg(data) = ip.recv();
                 println!("Node#{:02} received: {:02X?}", node.id, data);
             }
