@@ -2,7 +2,8 @@ use std::collections::HashMap;
 use std::fmt::Display;
 use std::sync::mpsc;
 
-use crate::node::DbgInfo;
+use crate::node::ether::MacAddr;
+use crate::node::{Common, DbgInfo, NextOp};
 
 pub(crate) type PortId = u32;
 
@@ -112,29 +113,27 @@ impl DbgInfo for Port {
 
 pub(crate) type Id = u32;
 
-struct PhyDbgInfo {
-    node_id: u32,
-}
-
 /** Collection of ports within the same local network */
 pub(crate) struct Phy {
     #[allow(dead_code)]
-    id: Id,
+    pub(crate) id: Id,
     rx: mpsc::Receiver<Msg>,
     tx: mpsc::Sender<Msg>,
     pub(crate) ports: HashMap<PortId, Port>,
-    dbg: PhyDbgInfo,
+    upper: MacAddr,
+    common: Common,
 }
 
 impl Phy {
-    pub(crate) fn new(id: Id, node_id: u32) -> Self {
+    pub(crate) fn new(id: Id, upper: MacAddr, common: Common) -> Self {
         let (tx, rx) = mpsc::channel();
         Phy {
             id,
             rx,
             tx,
             ports: HashMap::new(),
-            dbg: PhyDbgInfo { node_id },
+            upper,
+            common,
         }
     }
 
@@ -142,7 +141,7 @@ impl Phy {
         if self.ports.contains_key(&id) {
             return None;
         }
-        let port = Port::new(id, self.tx.clone(), self.dbg.node_id, self.id);
+        let port = Port::new(id, self.tx.clone(), self.node_id(), self.id);
         self.ports.insert(id, port);
         Some(self.ports.get_mut(&id).unwrap())
     }
@@ -151,12 +150,31 @@ impl Phy {
         self.ports.keys().copied().collect()
     }
 
-    pub(crate) fn try_recv(&self) -> Option<Msg> {
-        self.rx.try_recv().ok()
+    pub(crate) fn try_recv(&self) -> bool {
+        if let Ok(msg) = self.rx.try_recv() {
+            self.common
+                .op_tx
+                .send(NextOp::EtherReceive {
+                    ether_id: self.upper,
+                    msg,
+                })
+                .unwrap();
+            true
+        } else {
+            false
+        }
     }
 
-    pub(crate) fn recv(&self) -> Msg {
-        self.rx.recv().unwrap()
+    #[allow(dead_code)]
+    pub(crate) fn recv(&self) {
+        let msg = self.rx.recv().unwrap();
+        self.common
+            .op_tx
+            .send(NextOp::EtherReceive {
+                ether_id: self.upper,
+                msg,
+            })
+            .unwrap();
     }
 
     pub(crate) fn send(&self, port_id: PortId, data: Vec<u8>) {
@@ -181,6 +199,6 @@ impl Display for Phy {
 
 impl DbgInfo for Phy {
     fn node_id(&self) -> u32 {
-        self.dbg.node_id
+        self.common.node_id
     }
 }

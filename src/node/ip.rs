@@ -6,9 +6,9 @@ use std::fmt::Display;
 use std::ops::Deref;
 
 use self::arp::{Arp, ArpPacket};
-use crate::node::DbgInfo;
 use crate::node::ether;
 use crate::node::ether::{Ether, MacAddr};
+use crate::node::{Common, DbgInfo, NextOp};
 
 #[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
 pub(crate) struct IpAddr(pub(crate) [u8; 4]);
@@ -70,7 +70,7 @@ impl Subnet {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct IpV4Header {
+pub(crate) struct IpV4Header {
     version: u8,
     ihl: u8,  // Internet Header Length
     dscp: u8, // Differentiated Services Code Point
@@ -234,35 +234,24 @@ pub(crate) struct IpIf {
     pub(crate) ip_addr: IpAddr,
     arp_table: HashMap<IpAddr, MacAddr>,
     arp_wait_queue: VecDeque<(NextHop, IpV4Header, Vec<u8>)>,
-    pub(crate) ether: Ether,
+    lower: MacAddr,
+    common: Common,
 }
 
 impl IpIf {
-    pub(crate) fn new(ip_addr: IpAddr, ether: Ether) -> Self {
+    pub(crate) fn new(ip_addr: IpAddr, lower: MacAddr, common: Common) -> Self {
         IpIf {
             ip_addr,
             arp_table: HashMap::new(),
             arp_wait_queue: VecDeque::new(),
-            ether,
+            lower,
+            common,
         }
     }
 
-    fn try_recv(&mut self) -> Option<IpIfMsg> {
-        loop {
-            let msg = self.ether.try_recv()?;
-            if let Some(msg) = self.handle(msg) {
-                return Some(msg);
-            }
-        }
-    }
-
-    #[allow(dead_code)]
-    fn recv(&mut self) -> IpIfMsg {
-        loop {
-            let msg = self.ether.recv();
-            if let Some(msg) = self.handle(msg) {
-                return msg;
-            }
+    pub(crate) fn recv(&mut self, msg: ether::Msg) {
+        if let Some(msg) = self.handle(msg) {
+            self.common.op_tx.send(NextOp::IpReceive { msg }).unwrap();
         }
     }
 
@@ -310,7 +299,7 @@ impl IpIf {
         }
     }
 
-    fn send(&mut self, next_hop: NextHop, header: IpV4Header, data: &[u8]) {
+    pub(crate) fn send(&mut self, next_hop: NextHop, header: IpV4Header, data: &[u8]) {
         let next_ip = match next_hop {
             NextHop::Direct => header.dest_ip,
             NextHop::Indirect(ip) => ip,
@@ -323,7 +312,15 @@ impl IpIf {
                 next_ip
             );
             let data = [&<Vec<u8>>::from(&header), data].concat();
-            self.ether.send(mac_addr, Ether::ETHERTYPE_IPV4, &data);
+            self.common
+                .op_tx
+                .send(NextOp::EtherSend {
+                    ether_id: self.lower,
+                    dst_mac: mac_addr,
+                    ethertype: Ether::ETHERTYPE_IPV4,
+                    payload: data,
+                })
+                .unwrap();
         } else {
             self.arp_wait_queue
                 .push_back((next_hop, header, data.into()));
@@ -342,7 +339,7 @@ impl Display for IpIf {
 
 impl DbgInfo for IpIf {
     fn node_id(&self) -> u32 {
-        self.ether.node_id()
+        self.common.node_id
     }
 }
 
@@ -375,18 +372,20 @@ impl RoutingTable {
 }
 
 pub(crate) struct Ip {
-    ifs: Vec<IpIf>,
     routing_table: RoutingTable,
+    lowers: Vec<IpAddr>,
+    common: Common,
 }
 
 impl Ip {
     // pub(crate) const IP_PROTOCOL_TCP: u8 = 0x06;
     pub(crate) const IP_PROTOCOL_UDP: u8 = 0x11;
 
-    pub(crate) fn new(ifs: Vec<IpIf>) -> Self {
+    pub(crate) fn new(lowers: Vec<IpAddr>, common: Common) -> Self {
         Self {
-            ifs,
             routing_table: RoutingTable::new(),
+            lowers,
+            common,
         }
     }
 
@@ -394,48 +393,24 @@ impl Ip {
         self.routing_table.add(subnet, next_hop, ifip);
     }
 
-    fn resolve_routing_mut(&mut self, dest_ip: IpAddr) -> Option<(&mut IpIf, NextHop)> {
+    fn resolve_routing_mut(&mut self, dest_ip: IpAddr) -> Option<(IpAddr, NextHop)> {
         let (next_hop, if_ip) = self.routing_table.resolve(dest_ip)?;
-        self.ifs
-            .iter_mut()
-            .find(|ipif| ipif.ip_addr == if_ip)
-            .map(|ipif| (ipif, next_hop))
+        self.lowers
+            .iter()
+            .find(|addr| **addr == if_ip)
+            .map(|ipif| (*ipif, next_hop))
     }
 
     fn is_my_ip(&self, ip_addr: IpAddr) -> bool {
-        self.ifs.iter().any(|ipif| ipif.ip_addr == ip_addr)
+        self.lowers.iter().any(|addr| *addr == ip_addr)
     }
 
-    #[allow(dead_code)]
-    pub(crate) fn try_recv(&mut self) -> Option<Msg> {
-        let len = self.ifs.len();
-        for i in 0..len {
-            let Some(msg) = self.ifs[i].try_recv() else {
-                continue;
-            };
-            let Some(msg) = self.handle(msg) else {
-                continue;
-            };
-            return Some(msg);
+    pub(crate) fn recv(&mut self, msg: IpIfMsg) -> Option<Msg> {
+        if let Some(msg) = self.handle(msg) {
+            Some(msg)
+        } else {
+            None
         }
-        // All None. Give up
-        None
-    }
-
-    pub(crate) fn recv(&mut self) -> Msg {
-        let len = self.ifs.len();
-        // loop forever
-        for i in (0..len).cycle() {
-            std::thread::sleep(std::time::Duration::from_millis(1));
-            let Some(msg) = self.ifs[i].try_recv() else {
-                continue;
-            };
-            let Some(msg) = self.handle(msg) else {
-                continue;
-            };
-            return msg;
-        }
-        unreachable!()
     }
 
     fn handle(&mut self, msg: IpIfMsg) -> Option<Msg> {
@@ -457,18 +432,34 @@ impl Ip {
     }
 
     pub(crate) fn send(&mut self, protocol: u8, dest_ip: IpAddr, data: &[u8]) {
-        let (ipif, next_hop) = self
+        let (ifip, next_hop) = self
             .resolve_routing_mut(dest_ip)
             .expect(&format!("failed to resolve routing to {}", dest_ip));
-        let header = IpV4Header::new(ipif.ip_addr, dest_ip, protocol, data.len() as u16);
-        ipif.send(next_hop, header, data);
+        let header = IpV4Header::new(ifip, dest_ip, protocol, data.len() as u16);
+        self.common
+            .op_tx
+            .send(NextOp::IpIfSend {
+                ifip,
+                next_hop,
+                header,
+                data: data.to_vec(),
+            })
+            .unwrap();
     }
 
     fn send_with_header(&mut self, header: IpV4Header, data: &[u8]) {
-        let (ipif, next_hop) = self
+        let (ifip, next_hop) = self
             .resolve_routing_mut(header.dest_ip)
             .expect(&format!("failed to resolve routing to {}", header.dest_ip));
-        ipif.send(next_hop, header, data);
+        self.common
+            .op_tx
+            .send(NextOp::IpIfSend {
+                ifip,
+                next_hop,
+                header,
+                data: data.to_vec(),
+            })
+            .unwrap();
     }
 }
 
@@ -480,6 +471,6 @@ impl Display for Ip {
 
 impl DbgInfo for Ip {
     fn node_id(&self) -> u32 {
-        self.ifs[0].node_id()
+        self.common.node_id
     }
 }

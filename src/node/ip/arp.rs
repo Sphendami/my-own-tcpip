@@ -2,9 +2,9 @@ use std::fmt::Display;
 use std::ops::Deref;
 
 use super::IpIf;
-use crate::node::DbgInfo;
 use crate::node::ether::{Ether, MacAddr};
 use crate::node::ip::IpAddr;
+use crate::node::{DbgInfo, NextOp};
 
 pub(super) struct ArpPacket {
     hardware_type: u16,
@@ -112,29 +112,32 @@ impl Arp<'_> {
     }
 
     pub(super) fn send_arp_request(&self, dest_ip: IpAddr) {
-        let arp_packet = ArpPacket::new(
-            ArpPacket::OP_REQUEST,
-            dest_ip,
-            self.0.ether.mac_addr,
-            self.0.ip_addr,
-        );
-        self.0.ether.send(
-            Ether::MAC_ADDR_BROADCAST,
-            Ether::ETHERTYPE_ARP,
-            &Vec::from(arp_packet),
-        );
+        let arp_packet =
+            ArpPacket::new(ArpPacket::OP_REQUEST, dest_ip, self.0.lower, self.0.ip_addr);
+        self.0
+            .common
+            .op_tx
+            .send(NextOp::EtherSend {
+                ether_id: self.0.lower,
+                dst_mac: Ether::MAC_ADDR_BROADCAST,
+                ethertype: Ether::ETHERTYPE_ARP,
+                payload: Vec::from(arp_packet),
+            })
+            .unwrap();
     }
 
     fn send_arp_reply(&self, dest_mac: MacAddr, dest_ip: IpAddr, sender_ip: IpAddr) {
-        let arp_packet = ArpPacket::new(
-            ArpPacket::OP_REPLY,
-            dest_ip,
-            self.0.ether.mac_addr,
-            sender_ip,
-        );
+        let arp_packet = ArpPacket::new(ArpPacket::OP_REPLY, dest_ip, self.0.lower, sender_ip);
         self.0
-            .ether
-            .send(dest_mac, Ether::ETHERTYPE_ARP, &Vec::from(arp_packet));
+            .common
+            .op_tx
+            .send(NextOp::EtherSend {
+                ether_id: self.0.lower,
+                dst_mac: dest_mac,
+                ethertype: Ether::ETHERTYPE_ARP,
+                payload: Vec::from(arp_packet),
+            })
+            .unwrap();
     }
 
     pub(super) fn handle(&mut self, arp_packet_data: &[u8]) {

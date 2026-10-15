@@ -2,9 +2,9 @@ use std::collections::HashMap;
 use std::fmt::Display;
 use std::ops::Deref;
 
-use crate::node::DbgInfo;
+use crate::node::ip::IpAddr;
 use crate::node::phy;
-use crate::node::phy::Phy;
+use crate::node::{Common, DbgInfo, NextOp};
 
 #[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
 pub(crate) struct MacAddr(pub(crate) [u8; 6]);
@@ -137,7 +137,10 @@ pub(crate) struct Msg {
 pub(crate) struct Ether {
     pub(crate) mac_addr: MacAddr,
     mac_addr_table: HashMap<MacAddr, phy::PortId>,
-    pub(crate) phy: Phy,
+    upper: IpAddr,
+    lower: phy::Id,
+    lower_port_ids__: Vec<phy::PortId>,
+    common: Common,
 }
 
 impl Ether {
@@ -147,11 +150,20 @@ impl Ether {
     pub(crate) const ETHERTYPE_ARP: u16 = 0x0806;
     // pub(crate) const ETHERTYPE_LOCAL1: u16 = 0x88B5;
 
-    pub(crate) fn new(mac_addr: MacAddr, phy: Phy) -> Self {
+    pub(crate) fn new(
+        mac_addr: MacAddr,
+        upper: IpAddr,
+        lower: phy::Id,
+        lower_port_ids__: Vec<phy::PortId>,
+        common: Common,
+    ) -> Self {
         Ether {
             mac_addr,
             mac_addr_table: HashMap::new(),
-            phy,
+            upper,
+            lower,
+            lower_port_ids__,
+            common,
         }
     }
 
@@ -160,29 +172,23 @@ impl Ether {
             Some(&port_id) => vec![port_id],
             // flooding except the port it came from
             None => self
-                .phy
-                .port_ids()
+                .lower_port_ids__
+                .clone()
                 .into_iter()
                 .filter(|&id| Some(id) != except)
                 .collect(),
         }
     }
 
-    pub(crate) fn try_recv(&mut self) -> Option<Msg> {
-        loop {
-            let msg = self.phy.try_recv()?;
-            if let Some(msg) = self.handle(msg) {
-                return Some(msg);
-            }
-        }
-    }
-
-    pub(crate) fn recv(&mut self) -> Msg {
-        loop {
-            let msg = self.phy.recv();
-            if let Some(msg) = self.handle(msg) {
-                return msg;
-            }
+    pub(crate) fn recv(&mut self, msg: phy::Msg) {
+        if let Some(msg) = self.handle(msg) {
+            self.common
+                .op_tx
+                .send(NextOp::IpIfReceive {
+                    ifip: self.upper,
+                    msg,
+                })
+                .unwrap();
         }
     }
 
@@ -250,7 +256,14 @@ impl Ether {
             }
 
             for fwd_port_id in fwd_port_ids {
-                self.phy.send(fwd_port_id, frame.clone());
+                self.common
+                    .op_tx
+                    .send(NextOp::PhySend {
+                        phy_id: self.lower,
+                        port_id: fwd_port_id,
+                        data: frame.clone(),
+                    })
+                    .unwrap();
             }
         }
 
@@ -299,7 +312,14 @@ impl Ether {
         );
 
         for port_id in port_ids {
-            self.phy.send(port_id, frame.clone());
+            self.common
+                .op_tx
+                .send(NextOp::PhySend {
+                    phy_id: self.lower,
+                    port_id,
+                    data: frame.clone(),
+                })
+                .unwrap();
         }
     }
 }
@@ -312,6 +332,6 @@ impl Display for Ether {
 
 impl DbgInfo for Ether {
     fn node_id(&self) -> u32 {
-        self.phy.node_id()
+        self.common.node_id
     }
 }
