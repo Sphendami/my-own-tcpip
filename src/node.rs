@@ -8,7 +8,7 @@ use std::sync::mpsc;
 use std::thread;
 
 use self::ether::{Ether, MacAddr};
-use self::ip::{Ip, IpAddr, IpIf, IpIfMsg, IpV4Header, NextHop};
+use self::ip::{Ip, IpAddr, IpIf, IpIfMsg};
 use self::phy::Phy;
 
 pub(crate) enum NextOp {
@@ -25,8 +25,7 @@ pub(crate) enum NextOp {
     },
     IpIfSend {
         ifip: IpAddr,
-        next_hop: NextHop,
-        header: IpV4Header,
+        next_ip: IpAddr,
         data: Vec<u8>,
     },
     IpSend {
@@ -133,12 +132,11 @@ impl Node {
                     }
                     NextOp::IpIfSend {
                         ifip,
-                        next_hop,
-                        header,
+                        next_ip,
                         data,
                     } => {
                         if let Some(ipif) = self.ipifs.get_mut(&ifip) {
-                            ipif.send(next_hop, header, &data);
+                            ipif.send(next_ip, &data);
                         } else {
                             eprintln!(
                                 "Node#{:02} IpIf#{} not found (ignore the send)",
@@ -178,7 +176,7 @@ impl Node {
                         }
                     }
                     NextOp::IpReceive { msg } => {
-                        if let Some(ip) = &mut self.ip {
+                        if let Some(ip) = &self.ip {
                             let msg = ip.recv(msg);
                             if let Some(msg) = msg
                                 && let Some(on_recv) = &self.on_recv

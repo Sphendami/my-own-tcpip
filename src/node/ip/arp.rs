@@ -104,6 +104,18 @@ impl TryFrom<&[u8]> for ArpPacket {
     }
 }
 
+pub(super) enum ArpHandleResult {
+    Request {
+        sender_mac: MacAddr,
+        sender_ip: IpAddr,
+    },
+    Reply {
+        #[allow(dead_code)]
+        sender_mac: MacAddr,
+        sender_ip: IpAddr,
+    },
+}
+
 pub(super) struct Arp<'a>(pub(super) &'a mut IpIf);
 
 impl Arp<'_> {
@@ -126,8 +138,8 @@ impl Arp<'_> {
             .unwrap();
     }
 
-    fn send_arp_reply(&self, dest_mac: MacAddr, dest_ip: IpAddr, sender_ip: IpAddr) {
-        let arp_packet = ArpPacket::new(ArpPacket::OP_REPLY, dest_ip, self.0.lower, sender_ip);
+    pub(super) fn send_arp_reply(&self, dest_mac: MacAddr, dest_ip: IpAddr) {
+        let arp_packet = ArpPacket::new(ArpPacket::OP_REPLY, dest_ip, self.0.lower, self.0.ip_addr);
         self.0
             .common
             .op_tx
@@ -140,7 +152,7 @@ impl Arp<'_> {
             .unwrap();
     }
 
-    pub(super) fn handle(&mut self, arp_packet_data: &[u8]) {
+    pub(super) fn handle(&mut self, arp_packet_data: &[u8]) -> Option<ArpHandleResult> {
         match ArpPacket::try_from(arp_packet_data) {
             Err(e) => {
                 eprintln!(
@@ -149,7 +161,7 @@ impl Arp<'_> {
                     e,
                     arp_packet_data
                 );
-                return;
+                return None;
             }
             Ok(ArpPacket {
                 hardware_type,
@@ -175,30 +187,30 @@ impl Arp<'_> {
                         hardware_size,
                         protocol_size
                     );
-                    return;
+                    return None;
                 }
 
                 self.0.arp_table.insert(sender_ip, sender_mac);
 
+                if target_ip != self.0.ip_addr {
+                    eprintln!(
+                        "{} received arp packet for {} but my IP is {}. dropping the packet.",
+                        self.dbg_header(),
+                        target_ip,
+                        self.0.ip_addr
+                    );
+                    return None;
+                }
+
                 match opcode {
-                    ArpPacket::OP_REQUEST => {
-                        println!("{} req received from {}", self.dbg_header(), sender_ip);
-                        if target_ip == self.0.ip_addr {
-                            println!("{} sending reply to {}", self.dbg_header(), sender_ip);
-                            self.send_arp_reply(sender_mac, sender_ip, self.0.ip_addr);
-                        } else {
-                            eprintln!(
-                                "{} received request for {} but my IP is {}. dropping request.",
-                                self.dbg_header(),
-                                target_ip,
-                                self.0.ip_addr
-                            );
-                        }
-                    }
-                    ArpPacket::OP_REPLY => {
-                        println!("{} reply received from {}", self.dbg_header(), sender_ip);
-                        return;
-                    }
+                    ArpPacket::OP_REQUEST => Some(ArpHandleResult::Request {
+                        sender_mac,
+                        sender_ip,
+                    }),
+                    ArpPacket::OP_REPLY => Some(ArpHandleResult::Reply {
+                        sender_mac,
+                        sender_ip,
+                    }),
                     _ => {
                         eprintln!(
                             "{} received from {} but invalid op code: {:#04x}",
@@ -206,7 +218,7 @@ impl Arp<'_> {
                             sender_ip,
                             opcode
                         );
-                        return;
+                        return None;
                     }
                 }
             }
