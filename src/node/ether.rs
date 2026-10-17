@@ -184,8 +184,8 @@ impl Ether {
         if let Some(msg) = self.handle(msg) {
             self.common
                 .op_tx
-                .send(NextOp::IpIfReceive {
-                    ifip: self.upper,
+                .send(NextOp::IfaceReceive {
+                    iface_id: self.upper,
                     msg,
                 })
                 .unwrap();

@@ -1,13 +1,7 @@
-mod arp;
-
-use std::collections::HashMap;
-use std::collections::VecDeque;
 use std::fmt::Display;
 use std::ops::Deref;
 
-use self::arp::{Arp, ArpHandleResult, ArpPacket};
-use crate::node::ether;
-use crate::node::ether::{Ether, MacAddr};
+use crate::node::iface;
 use crate::node::{Common, DbgInfo, NextOp};
 
 #[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
@@ -228,115 +222,6 @@ mod test {
 #[derive(Debug)]
 pub(crate) struct Msg(pub(crate) Vec<u8>);
 
-pub(crate) struct IpIfMsg(Vec<u8>);
-
-pub(crate) struct IpIf {
-    pub(crate) ip_addr: IpAddr,
-    arp_table: HashMap<IpAddr, MacAddr>,
-    arp_wait_queue: VecDeque<(IpAddr, Vec<u8>)>,
-    lower: MacAddr,
-    common: Common,
-}
-
-impl IpIf {
-    pub(crate) fn new(ip_addr: IpAddr, lower: MacAddr, common: Common) -> Self {
-        IpIf {
-            ip_addr,
-            arp_table: HashMap::new(),
-            arp_wait_queue: VecDeque::new(),
-            lower,
-            common,
-        }
-    }
-
-    pub(crate) fn recv(&mut self, msg: ether::Msg) {
-        if let Some(msg) = self.handle(msg) {
-            self.common.op_tx.send(NextOp::IpReceive { msg }).unwrap();
-        }
-    }
-
-    fn handle(&mut self, msg: ether::Msg) -> Option<IpIfMsg> {
-        let ether::Msg { ether_type, data } = msg;
-        match ether_type {
-            Ether::ETHERTYPE_ARP => {
-                match Arp(self).handle(&data[0..ArpPacket::U8_REPR_SIZE])? {
-                    ArpHandleResult::Request {
-                        sender_mac,
-                        sender_ip,
-                    } => {
-                        println!("{} received arp req from {}", self.dbg_header(), sender_ip);
-                        println!("{} sending arp reply to {}", self.dbg_header(), sender_ip);
-                        Arp(self).send_arp_reply(sender_mac, sender_ip);
-                    }
-                    ArpHandleResult::Reply {
-                        sender_mac: _,
-                        sender_ip,
-                    } => {
-                        println!(
-                            "{} received arp reply from {}",
-                            self.dbg_header(),
-                            sender_ip
-                        );
-                        while let Some((next_ip, data)) = self.arp_wait_queue.pop_front() {
-                            println!("{} re-sending saved req", self.dbg_header());
-                            self.send(next_ip, &data);
-                        }
-                    }
-                }
-                return None;
-            }
-            Ether::ETHERTYPE_IPV4 => {
-                return Some(IpIfMsg(data));
-            }
-            _ => {
-                eprintln!(
-                    "{} received unsupported EtherType: {:#04x}",
-                    self.dbg_header(),
-                    ether_type
-                );
-                return None;
-            }
-        }
-    }
-
-    pub(crate) fn send(&mut self, next_ip: IpAddr, data: &[u8]) {
-        if let Some(&mac_addr) = Arp(self).get_mac_addr(next_ip) {
-            println!(
-                "{} sending data to MAC addr: {} for IP: {}",
-                self.dbg_header(),
-                mac_addr,
-                next_ip
-            );
-            self.common
-                .op_tx
-                .send(NextOp::EtherSend {
-                    ether_id: self.lower,
-                    dst_mac: mac_addr,
-                    ethertype: Ether::ETHERTYPE_IPV4,
-                    payload: data.to_vec(),
-                })
-                .unwrap();
-        } else {
-            self.arp_wait_queue.push_back((next_ip, data.into()));
-            println!("{} saved send req temporarily", self.dbg_header());
-            println!("{} sending arp req to {}", self.dbg_header(), next_ip);
-            Arp(self).send_arp_request(next_ip);
-        }
-    }
-}
-
-impl Display for IpIf {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "IP#{}.{}", self.ip_addr.0[2], self.ip_addr.0[3])
-    }
-}
-
-impl DbgInfo for IpIf {
-    fn node_id(&self) -> u32 {
-        self.common.node_id
-    }
-}
-
 #[derive(Clone, Copy)]
 pub(crate) enum NextHop {
     Direct,
@@ -350,14 +235,14 @@ impl RoutingTable {
         Self(Vec::new())
     }
 
-    fn add(&mut self, subnet: Subnet, next_hop: NextHop, ifip: IpAddr) {
-        self.0.push((subnet, next_hop, ifip));
+    fn add(&mut self, subnet: Subnet, next_hop: NextHop, iface_id: IpAddr) {
+        self.0.push((subnet, next_hop, iface_id));
     }
 
     fn resolve(&self, ip_addr: IpAddr) -> Option<(NextHop, IpAddr)> {
-        self.0.iter().find_map(|(subnet, next_hop, ifip)| {
+        self.0.iter().find_map(|(subnet, next_hop, iface_id)| {
             if subnet.contains(ip_addr) {
-                Some((*next_hop, *ifip))
+                Some((*next_hop, *iface_id))
             } else {
                 None
             }
@@ -383,23 +268,23 @@ impl Ip {
         }
     }
 
-    pub(crate) fn add_routing(&mut self, subnet: Subnet, next_hop: NextHop, ifip: IpAddr) {
-        self.routing_table.add(subnet, next_hop, ifip);
+    pub(crate) fn add_routing(&mut self, subnet: Subnet, next_hop: NextHop, iface_id: IpAddr) {
+        self.routing_table.add(subnet, next_hop, iface_id);
     }
 
     fn resolve_routing(&self, dest_ip: IpAddr) -> Option<(IpAddr, NextHop)> {
-        let (next_hop, if_ip) = self.routing_table.resolve(dest_ip)?;
+        let (next_hop, iface_id) = self.routing_table.resolve(dest_ip)?;
         self.lowers
             .iter()
-            .find(|addr| **addr == if_ip)
-            .map(|ipif| (*ipif, next_hop))
+            .find(|id| **id == iface_id)
+            .map(|iface_id| (*iface_id, next_hop))
     }
 
     fn is_my_ip(&self, ip_addr: IpAddr) -> bool {
         self.lowers.iter().any(|addr| *addr == ip_addr)
     }
 
-    pub(crate) fn recv(&self, msg: IpIfMsg) -> Option<Msg> {
+    pub(crate) fn recv(&self, msg: iface::Msg) -> Option<Msg> {
         if let Some(msg) = self.handle(msg) {
             Some(msg)
         } else {
@@ -407,8 +292,8 @@ impl Ip {
         }
     }
 
-    fn handle(&self, msg: IpIfMsg) -> Option<Msg> {
-        let IpIfMsg(data) = msg;
+    fn handle(&self, msg: iface::Msg) -> Option<Msg> {
+        let iface::Msg(data) = msg;
 
         let h_len = IpV4Header::U8_REPR_SIZE as usize;
         let mut header = match IpV4Header::try_from(&data[0..h_len]) {
@@ -446,10 +331,10 @@ impl Ip {
     }
 
     pub(crate) fn send(&self, protocol: u8, dest_ip: IpAddr, data: &[u8]) {
-        let (ifip, next_hop) = self
+        let (iface_id, next_hop) = self
             .resolve_routing(dest_ip)
             .expect(&format!("failed to resolve routing to {}", dest_ip));
-        let header = IpV4Header::new(ifip, dest_ip, protocol, data.len() as u16);
+        let header = IpV4Header::new(iface_id, dest_ip, protocol, data.len() as u16);
         let next_ip = match next_hop {
             NextHop::Direct => header.dest_ip,
             NextHop::Indirect(ip) => ip,
@@ -457,8 +342,8 @@ impl Ip {
         let data = [&<Vec<u8>>::from(&header), data].concat();
         self.common
             .op_tx
-            .send(NextOp::IpIfSend {
-                ifip,
+            .send(NextOp::IfaceSend {
+                iface_id,
                 next_ip,
                 data,
             })
@@ -466,7 +351,7 @@ impl Ip {
     }
 
     fn send_with_header(&self, header: IpV4Header, data: &[u8]) {
-        let (ifip, next_hop) = self
+        let (iface_id, next_hop) = self
             .resolve_routing(header.dest_ip)
             .expect(&format!("failed to resolve routing to {}", header.dest_ip));
         let next_ip = match next_hop {
@@ -476,8 +361,8 @@ impl Ip {
         let data = [&<Vec<u8>>::from(&header), data].concat();
         self.common
             .op_tx
-            .send(NextOp::IpIfSend {
-                ifip,
+            .send(NextOp::IfaceSend {
+                iface_id,
                 next_ip,
                 data,
             })

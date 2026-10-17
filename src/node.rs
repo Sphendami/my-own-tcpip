@@ -1,4 +1,5 @@
 pub(crate) mod ether;
+pub(crate) mod iface;
 pub(crate) mod ip;
 pub(crate) mod phy;
 
@@ -8,7 +9,8 @@ use std::sync::mpsc;
 use std::thread;
 
 use self::ether::{Ether, MacAddr};
-use self::ip::{Ip, IpAddr, IpIf, IpIfMsg};
+use self::iface::Iface;
+use self::ip::{Ip, IpAddr};
 use self::phy::Phy;
 
 pub(crate) enum NextOp {
@@ -23,8 +25,8 @@ pub(crate) enum NextOp {
         ethertype: u16,
         payload: Vec<u8>,
     },
-    IpIfSend {
-        ifip: IpAddr,
+    IfaceSend {
+        iface_id: IpAddr,
         next_ip: IpAddr,
         data: Vec<u8>,
     },
@@ -37,12 +39,12 @@ pub(crate) enum NextOp {
         ether_id: MacAddr,
         msg: phy::Msg,
     },
-    IpIfReceive {
-        ifip: IpAddr,
+    IfaceReceive {
+        iface_id: IpAddr,
         msg: ether::Msg,
     },
     IpReceive {
-        msg: IpIfMsg,
+        msg: iface::Msg,
     },
 }
 
@@ -57,7 +59,7 @@ pub(crate) struct Node {
     op_rx: mpsc::Receiver<NextOp>,
     pub(crate) common: Common,
     pub(crate) ip: Option<Ip>,
-    pub(crate) ipifs: HashMap<IpAddr, IpIf>,
+    pub(crate) ifaces: HashMap<IpAddr, Iface>,
     pub(crate) ethers: HashMap<MacAddr, Ether>,
     pub(crate) phys: HashMap<phy::Id, Phy>,
     pub(crate) on_recv: Option<Box<dyn Fn(Common, ip::Msg) + Send>>,
@@ -71,7 +73,7 @@ impl Node {
             op_rx,
             common: Common { node_id: id, op_tx },
             ip: None,
-            ipifs: HashMap::new(),
+            ifaces: HashMap::new(),
             ethers: HashMap::new(),
             phys: HashMap::new(),
             on_recv: None,
@@ -130,17 +132,17 @@ impl Node {
                             );
                         }
                     }
-                    NextOp::IpIfSend {
-                        ifip,
+                    NextOp::IfaceSend {
+                        iface_id,
                         next_ip,
                         data,
                     } => {
-                        if let Some(ipif) = self.ipifs.get_mut(&ifip) {
-                            ipif.send(next_ip, &data);
+                        if let Some(iface) = self.ifaces.get_mut(&iface_id) {
+                            iface.send(next_ip, &data);
                         } else {
                             eprintln!(
-                                "Node#{:02} IpIf#{} not found (ignore the send)",
-                                self.id, ifip
+                                "Node#{:02} Iface#{} not found (ignore the send)",
+                                self.id, iface_id
                             );
                         }
                     }
@@ -165,13 +167,13 @@ impl Node {
                             );
                         }
                     }
-                    NextOp::IpIfReceive { ifip, msg } => {
-                        if let Some(ipif) = self.ipifs.get_mut(&ifip) {
-                            ipif.recv(msg);
+                    NextOp::IfaceReceive { iface_id, msg } => {
+                        if let Some(iface) = self.ifaces.get_mut(&iface_id) {
+                            iface.recv(msg);
                         } else {
                             eprintln!(
-                                "Node#{:02} IpIf#{} not found (ignore the receive)",
-                                self.id, ifip
+                                "Node#{:02} Iface#{} not found (ignore the receive)",
+                                self.id, iface_id
                             );
                         }
                     }

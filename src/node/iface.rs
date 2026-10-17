@@ -1,12 +1,12 @@
+use std::collections::{HashMap, VecDeque};
 use std::fmt::Display;
 use std::ops::Deref;
 
-use super::IpIf;
-use crate::node::ether::{Ether, MacAddr};
+use crate::node::ether::{self, Ether, MacAddr};
 use crate::node::ip::IpAddr;
-use crate::node::{DbgInfo, NextOp};
+use crate::node::{Common, DbgInfo, NextOp};
 
-pub(super) struct ArpPacket {
+struct ArpPacket {
     hardware_type: u16,
     protocol_type: u16,
     hardware_size: u8,
@@ -19,19 +19,14 @@ pub(super) struct ArpPacket {
 }
 
 impl ArpPacket {
-    pub(super) const U8_REPR_SIZE: usize = 28;
+    const U8_REPR_SIZE: usize = 28;
 
     const HTYPE_ETHERNET: u16 = 1;
 
-    pub(super) const OP_REQUEST: u16 = 1;
-    pub(super) const OP_REPLY: u16 = 2;
+    const OP_REQUEST: u16 = 1;
+    const OP_REPLY: u16 = 2;
 
-    pub(super) fn new(
-        opcode: u16,
-        dest_ip: IpAddr,
-        sender_mac: MacAddr,
-        sender_ip: IpAddr,
-    ) -> Self {
+    fn new(opcode: u16, dest_ip: IpAddr, sender_mac: MacAddr, sender_ip: IpAddr) -> Self {
         ArpPacket {
             hardware_type: Self::HTYPE_ETHERNET,
             protocol_type: Ether::ETHERTYPE_IPV4,
@@ -104,7 +99,7 @@ impl TryFrom<&[u8]> for ArpPacket {
     }
 }
 
-pub(super) enum ArpHandleResult {
+enum ArpHandleResult {
     Request {
         sender_mac: MacAddr,
         sender_ip: IpAddr,
@@ -116,14 +111,14 @@ pub(super) enum ArpHandleResult {
     },
 }
 
-pub(super) struct Arp<'a>(pub(super) &'a mut IpIf);
+struct Arp<'a>(&'a mut Iface);
 
 impl Arp<'_> {
-    pub(super) fn get_mac_addr(&self, ip: IpAddr) -> Option<&MacAddr> {
+    fn get_mac_addr(&self, ip: IpAddr) -> Option<&MacAddr> {
         self.0.arp_table.get(&ip)
     }
 
-    pub(super) fn send_arp_request(&self, dest_ip: IpAddr) {
+    fn send_arp_request(&self, dest_ip: IpAddr) {
         let arp_packet =
             ArpPacket::new(ArpPacket::OP_REQUEST, dest_ip, self.0.lower, self.0.ip_addr);
         self.0
@@ -138,7 +133,7 @@ impl Arp<'_> {
             .unwrap();
     }
 
-    pub(super) fn send_arp_reply(&self, dest_mac: MacAddr, dest_ip: IpAddr) {
+    fn send_arp_reply(&self, dest_mac: MacAddr, dest_ip: IpAddr) {
         let arp_packet = ArpPacket::new(ArpPacket::OP_REPLY, dest_ip, self.0.lower, self.0.ip_addr);
         self.0
             .common
@@ -152,7 +147,7 @@ impl Arp<'_> {
             .unwrap();
     }
 
-    pub(super) fn handle(&mut self, arp_packet_data: &[u8]) -> Option<ArpHandleResult> {
+    fn handle(&mut self, arp_packet_data: &[u8]) -> Option<ArpHandleResult> {
         match ArpPacket::try_from(arp_packet_data) {
             Err(e) => {
                 eprintln!(
@@ -235,5 +230,114 @@ impl Display for Arp<'_> {
 impl DbgInfo for Arp<'_> {
     fn node_id(&self) -> u32 {
         self.0.node_id()
+    }
+}
+
+pub(crate) struct Msg(pub(crate) Vec<u8>);
+
+pub(crate) struct Iface {
+    pub(crate) ip_addr: IpAddr,
+    arp_table: HashMap<IpAddr, MacAddr>,
+    arp_wait_queue: VecDeque<(IpAddr, Vec<u8>)>,
+    lower: MacAddr,
+    common: Common,
+}
+
+impl Iface {
+    pub(crate) fn new(ip_addr: IpAddr, lower: MacAddr, common: Common) -> Self {
+        Iface {
+            ip_addr,
+            arp_table: HashMap::new(),
+            arp_wait_queue: VecDeque::new(),
+            lower,
+            common,
+        }
+    }
+
+    pub(crate) fn recv(&mut self, msg: ether::Msg) {
+        if let Some(msg) = self.handle(msg) {
+            self.common.op_tx.send(NextOp::IpReceive { msg }).unwrap();
+        }
+    }
+
+    fn handle(&mut self, msg: ether::Msg) -> Option<Msg> {
+        let ether::Msg { ether_type, data } = msg;
+        match ether_type {
+            Ether::ETHERTYPE_ARP => {
+                match Arp(self).handle(&data[0..ArpPacket::U8_REPR_SIZE])? {
+                    ArpHandleResult::Request {
+                        sender_mac,
+                        sender_ip,
+                    } => {
+                        println!("{} received arp req from {}", self.dbg_header(), sender_ip);
+                        println!("{} sending arp reply to {}", self.dbg_header(), sender_ip);
+                        Arp(self).send_arp_reply(sender_mac, sender_ip);
+                    }
+                    ArpHandleResult::Reply {
+                        sender_mac: _,
+                        sender_ip,
+                    } => {
+                        println!(
+                            "{} received arp reply from {}",
+                            self.dbg_header(),
+                            sender_ip
+                        );
+                        while let Some((next_ip, data)) = self.arp_wait_queue.pop_front() {
+                            println!("{} re-sending saved req", self.dbg_header());
+                            self.send(next_ip, &data);
+                        }
+                    }
+                }
+                return None;
+            }
+            Ether::ETHERTYPE_IPV4 => {
+                return Some(Msg(data));
+            }
+            _ => {
+                eprintln!(
+                    "{} received unsupported EtherType: {:#04x}",
+                    self.dbg_header(),
+                    ether_type
+                );
+                return None;
+            }
+        }
+    }
+
+    pub(crate) fn send(&mut self, next_ip: IpAddr, data: &[u8]) {
+        if let Some(&mac_addr) = Arp(self).get_mac_addr(next_ip) {
+            println!(
+                "{} sending data to MAC addr: {} for IP: {}",
+                self.dbg_header(),
+                mac_addr,
+                next_ip
+            );
+            self.common
+                .op_tx
+                .send(NextOp::EtherSend {
+                    ether_id: self.lower,
+                    dst_mac: mac_addr,
+                    ethertype: Ether::ETHERTYPE_IPV4,
+                    payload: data.to_vec(),
+                })
+                .unwrap();
+        } else {
+            self.arp_wait_queue.push_back((next_ip, data.into()));
+            println!("{} saved send req temporarily", self.dbg_header());
+            println!("{} sending arp req to {}", self.dbg_header(), next_ip);
+            Arp(self).send_arp_request(next_ip);
+        }
+    }
+}
+
+impl Display for Iface {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "IF#{}.{}", self.ip_addr.0[2], self.ip_addr.0[3])
+    }
+}
+
+impl DbgInfo for Iface {
+    fn node_id(&self) -> u32 {
+        self.common.node_id
     }
 }

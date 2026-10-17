@@ -1,7 +1,8 @@
 mod node;
 
 use crate::node::ether::{Ether, MacAddr};
-use crate::node::ip::{Ip, IpAddr, IpIf, NextHop, Subnet};
+use crate::node::iface::Iface;
+use crate::node::ip::{Ip, IpAddr, NextHop, Subnet};
 use crate::node::phy::Phy;
 use crate::node::*;
 
@@ -30,7 +31,7 @@ fn main() {
             phy.port_ids(),
             node.common.clone(),
         );
-        let ipif = IpIf::new(ip_addr, mac_addr, node.common.clone());
+        let iface = Iface::new(ip_addr, mac_addr, node.common.clone());
         let mut ip = Ip::new(vec![ip_addr], node.common.clone());
 
         ip.add_routing(subnet77, NextHop::Direct, node0_ip);
@@ -38,7 +39,7 @@ fn main() {
 
         node.phys.insert(phy_id, phy);
         node.ethers.insert(mac_addr, ether);
-        node.ipifs.insert(ip_addr, ipif);
+        node.ifaces.insert(ip_addr, iface);
         node.ip = Some(ip);
 
         node.on_recv = Some(Box::new(move |common, msg| {
@@ -74,11 +75,11 @@ fn main() {
                 phy.port_ids(),
                 node.common.clone(),
             );
-            let ipif = IpIf::new(ip_addr, mac_addr, node.common.clone());
+            let iface = Iface::new(ip_addr, mac_addr, node.common.clone());
 
             node.phys.insert(phy_id, phy);
             node.ethers.insert(mac_addr, ether);
-            node.ipifs.insert(ip_addr, ipif);
+            node.ifaces.insert(ip_addr, iface);
         }
         {
             let phy_id = 1;
@@ -94,11 +95,11 @@ fn main() {
                 phy.port_ids(),
                 node.common.clone(),
             );
-            let ipif = IpIf::new(ip_addr, mac_addr, node.common.clone());
+            let iface = Iface::new(ip_addr, mac_addr, node.common.clone());
 
             node.phys.insert(phy_id, phy);
             node.ethers.insert(mac_addr, ether);
-            node.ipifs.insert(ip_addr, ipif);
+            node.ifaces.insert(ip_addr, iface);
         }
 
         let mut ip = Ip::new(vec![node1_77_ip, node1_78_ip], node.common.clone());
@@ -130,7 +131,7 @@ fn main() {
             phy.port_ids(),
             node.common.clone(),
         );
-        let ipif = IpIf::new(ip_addr, mac_addr, node.common.clone());
+        let iface = Iface::new(ip_addr, mac_addr, node.common.clone());
         let mut ip = Ip::new(vec![ip_addr], node.common.clone());
 
         ip.add_routing(subnet77, NextHop::Indirect(node1_78_ip), node2_ip);
@@ -138,7 +139,7 @@ fn main() {
 
         node.phys.insert(phy_id, phy);
         node.ethers.insert(mac_addr, ether);
-        node.ipifs.insert(ip_addr, ipif);
+        node.ifaces.insert(ip_addr, iface);
         node.ip = Some(ip);
 
         // initial data
@@ -171,7 +172,7 @@ fn main() {
             phy.port_ids(),
             node.common.clone(),
         );
-        // let ipif = IpIf::new(ip_addr, mac_addr, node.common.clone());
+        // let iface = Iface::new(ip_addr, mac_addr, node.common.clone());
         // let mut ip = Ip::new(vec![ip_addr], node.common.clone());
 
         // ip.add_routing(subnet77, NextHop::Indirect(node1_78_ip), node2_ip);
@@ -179,7 +180,7 @@ fn main() {
 
         node.phys.insert(phy_id, phy);
         node.ethers.insert(mac_addr, ether);
-        // node.ipifs.insert(ip_addr, ipif);
+        // node.ifaces.insert(ip_addr, iface);
         // node.ip = Some(ip);
 
         // node.on_recv = Some(Box::new(move |common, msg| {
@@ -204,7 +205,7 @@ fn main() {
             phy.port_ids(),
             node.common.clone(),
         );
-        let ipif = IpIf::new(ip_addr, mac_addr, node.common.clone());
+        let iface = Iface::new(ip_addr, mac_addr, node.common.clone());
         let mut ip = Ip::new(vec![ip_addr], node.common.clone());
 
         ip.add_routing(subnet77, NextHop::Indirect(node1_78_ip), node4_ip);
@@ -212,7 +213,7 @@ fn main() {
 
         node.phys.insert(phy_id, phy);
         node.ethers.insert(mac_addr, ether);
-        node.ipifs.insert(ip_addr, ipif);
+        node.ifaces.insert(ip_addr, iface);
         node.ip = Some(ip);
 
         node.on_recv = Some(Box::new(move |common, msg| {
