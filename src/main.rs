@@ -2,7 +2,7 @@ mod node;
 
 use crate::node::ether::{Ether, MacAddr};
 use crate::node::iface::Iface;
-use crate::node::ip::{Ip, IpAddr, NextHop, Subnet};
+use crate::node::ip::{self, Ip, IpAddr, NextHop, Subnet};
 use crate::node::port::Port;
 use crate::node::*;
 
@@ -35,13 +35,15 @@ fn main() {
         node.ifaces.insert(ip_addr, iface);
         node.ip = Some(ip);
 
-        node.on_recv = Some(Box::new(move |common, msg| {
-            println!("Node#{} received: {:02X?}", common.node_id, msg);
+        node.on_recv = Some(Box::new(move |common, data| {
+            println!("Node#{} received: {:02X?}", common.node_id, data);
             println!("Node#{} sending back to {}", common.node_id, node4_ip);
             common.invoke(NextOp::IpSend {
-                protocol: Ip::IP_PROTOCOL_UDP,
-                dst_ip: node4_ip,
-                payload: msg.0,
+                arg: ip::SArg {
+                    protocol: Ip::IP_PROTOCOL_UDP,
+                    dst_ip: node4_ip,
+                    payload: data,
+                },
             });
         }));
 
@@ -85,8 +87,8 @@ fn main() {
 
         node.ip = Some(ip);
 
-        node.on_recv = Some(Box::new(move |common, msg| {
-            println!("Node#{} received: {:02X?}", common.node_id, msg);
+        node.on_recv = Some(Box::new(move |common, data| {
+            println!("Node#{} received: {:02X?}", common.node_id, data);
         }));
 
         node
@@ -113,9 +115,11 @@ fn main() {
 
         // initial data
         node.common.invoke(NextOp::IpSend {
-            protocol: Ip::IP_PROTOCOL_UDP,
-            dst_ip: node0_ip,
-            payload: vec![0, 1, 2, 3],
+            arg: ip::SArg {
+                protocol: Ip::IP_PROTOCOL_UDP,
+                dst_ip: node0_ip,
+                payload: vec![0, 1, 2, 3],
+            },
         });
 
         node
@@ -151,8 +155,8 @@ fn main() {
         // node.ifaces.insert(ip_addr, iface);
         // node.ip = Some(ip);
 
-        // node.on_recv = Some(Box::new(move |common, msg| {
-        //     println!("Node#{} received: {:02X?}", common.node_id, msg);
+        // node.on_recv = Some(Box::new(move |common, data| {
+        //     println!("Node#{} received: {:02X?}", common.node_id, data);
         // }));
 
         node
@@ -177,8 +181,8 @@ fn main() {
         node.ifaces.insert(ip_addr, iface);
         node.ip = Some(ip);
 
-        node.on_recv = Some(Box::new(move |common, msg| {
-            println!("Node#{} received: {:02X?}", common.node_id, msg);
+        node.on_recv = Some(Box::new(move |common, data| {
+            println!("Node#{} received: {:02X?}", common.node_id, data);
         }));
 
         node

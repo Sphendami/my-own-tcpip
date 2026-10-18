@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::fmt::Display;
 use std::ops::Deref;
 
+use crate::node::iface;
 use crate::node::ip::IpAddr;
 use crate::node::port::{self, PortId};
 use crate::node::{Common, DbgInfo, NextOp};
@@ -128,10 +129,15 @@ mod test {
     }
 }
 
-#[derive(Debug)]
-pub(crate) struct Msg {
-    pub(crate) ether_type: u16,
+pub(crate) struct RArg {
+    pub(crate) port_id: PortId,
     pub(crate) data: Vec<u8>,
+}
+
+pub(crate) struct SArg {
+    pub(crate) dst_mac: MacAddr,
+    pub(crate) ethertype: u16,
+    pub(crate) payload: Vec<u8>,
 }
 
 pub(crate) struct Ether {
@@ -177,20 +183,20 @@ impl Ether {
         }
     }
 
-    pub(crate) fn recv(&mut self, msg: port::Msg) {
-        if let Some(msg) = self.handle(msg) {
+    pub(crate) fn recv(&mut self, arg: RArg) {
+        if let Some(arg) = self.handle(arg) {
             self.common.invoke(NextOp::IfaceReceive {
                 iface_id: self.upper,
-                msg,
+                arg,
             });
         }
     }
 
-    fn handle(&mut self, msg: port::Msg) -> Option<Msg> {
-        let port::Msg {
+    fn handle(&mut self, arg: RArg) -> Option<iface::RArg> {
+        let RArg {
             port_id,
             data: frame,
-        } = msg;
+        } = arg;
 
         if frame.len() < 64 {
             eprintln!(
@@ -252,13 +258,15 @@ impl Ether {
             for fwd_port_id in fwd_port_ids {
                 self.common.invoke(NextOp::PortSend {
                     port_id: fwd_port_id,
-                    data: frame.clone(),
+                    arg: port::SArg {
+                        data: frame.clone(),
+                    },
                 });
             }
         }
 
         if header.dst_mac == self.mac_addr || header.dst_mac == Self::MAC_ADDR_BROADCAST {
-            Some(Msg {
+            Some(iface::RArg {
                 ether_type: header.ethertype,
                 data: payload.to_vec(),
             })
@@ -267,11 +275,17 @@ impl Ether {
         }
     }
 
-    pub(crate) fn send(&self, dst_mac: MacAddr, ethertype: u16, payload: &[u8]) {
+    pub(crate) fn send(&self, arg: SArg) {
+        let SArg {
+            dst_mac,
+            ethertype,
+            payload,
+        } = arg;
+
         let header = Header::new(dst_mac, self.mac_addr, ethertype);
         let mut frame = Vec::new();
         frame.extend_from_slice(&Vec::from(header));
-        frame.extend_from_slice(payload);
+        frame.extend_from_slice(&payload);
 
         // Pad the frame to a minimum of 64 bytes
         while frame.len() < 64 - 4 {
@@ -304,7 +318,9 @@ impl Ether {
         for port_id in port_ids {
             self.common.invoke(NextOp::PortSend {
                 port_id,
-                data: frame.clone(),
+                arg: port::SArg {
+                    data: frame.clone(),
+                },
             });
         }
     }

@@ -3,7 +3,7 @@ use std::fmt::Display;
 use std::ops::Deref;
 
 use crate::node::ether::{self, Ether, MacAddr};
-use crate::node::ip::IpAddr;
+use crate::node::ip::{self, IpAddr};
 use crate::node::{Common, DbgInfo, NextOp};
 
 struct ArpPacket {
@@ -123,9 +123,11 @@ impl Arp<'_> {
             ArpPacket::new(ArpPacket::OP_REQUEST, dest_ip, self.0.lower, self.0.ip_addr);
         self.0.common.invoke(NextOp::EtherSend {
             ether_id: self.0.lower,
-            dst_mac: Ether::MAC_ADDR_BROADCAST,
-            ethertype: Ether::ETHERTYPE_ARP,
-            payload: Vec::from(arp_packet),
+            arg: ether::SArg {
+                dst_mac: Ether::MAC_ADDR_BROADCAST,
+                ethertype: Ether::ETHERTYPE_ARP,
+                payload: Vec::from(arp_packet),
+            },
         });
     }
 
@@ -133,9 +135,11 @@ impl Arp<'_> {
         let arp_packet = ArpPacket::new(ArpPacket::OP_REPLY, dest_ip, self.0.lower, self.0.ip_addr);
         self.0.common.invoke(NextOp::EtherSend {
             ether_id: self.0.lower,
-            dst_mac: dest_mac,
-            ethertype: Ether::ETHERTYPE_ARP,
-            payload: Vec::from(arp_packet),
+            arg: ether::SArg {
+                dst_mac: dest_mac,
+                ethertype: Ether::ETHERTYPE_ARP,
+                payload: Vec::from(arp_packet),
+            },
         });
     }
 
@@ -225,7 +229,15 @@ impl DbgInfo for Arp<'_> {
     }
 }
 
-pub(crate) struct Msg(pub(crate) Vec<u8>);
+pub(crate) struct RArg {
+    pub(crate) ether_type: u16,
+    pub(crate) data: Vec<u8>,
+}
+
+pub(crate) struct SArg {
+    pub(crate) next_ip: IpAddr,
+    pub(crate) data: Vec<u8>,
+}
 
 pub(crate) struct Iface {
     pub(crate) ip_addr: IpAddr,
@@ -246,14 +258,15 @@ impl Iface {
         }
     }
 
-    pub(crate) fn recv(&mut self, msg: ether::Msg) {
-        if let Some(msg) = self.handle(msg) {
-            self.common.invoke(NextOp::IpReceive { msg });
+    pub(crate) fn recv(&mut self, arg: RArg) {
+        if let Some(arg) = self.handle(arg) {
+            self.common.invoke(NextOp::IpReceive { arg });
         }
     }
 
-    fn handle(&mut self, msg: ether::Msg) -> Option<Msg> {
-        let ether::Msg { ether_type, data } = msg;
+    fn handle(&mut self, arg: RArg) -> Option<ip::RArg> {
+        let RArg { ether_type, data } = arg;
+
         match ether_type {
             Ether::ETHERTYPE_ARP => {
                 match Arp(self).handle(&data[0..ArpPacket::U8_REPR_SIZE])? {
@@ -276,14 +289,14 @@ impl Iface {
                         );
                         while let Some((next_ip, data)) = self.arp_wait_queue.pop_front() {
                             println!("{} re-sending saved req", self.dbg_header());
-                            self.send(next_ip, &data);
+                            self.send(SArg { next_ip, data });
                         }
                     }
                 }
                 return None;
             }
             Ether::ETHERTYPE_IPV4 => {
-                return Some(Msg(data));
+                return Some(ip::RArg(data));
             }
             _ => {
                 eprintln!(
@@ -296,7 +309,9 @@ impl Iface {
         }
     }
 
-    pub(crate) fn send(&mut self, next_ip: IpAddr, data: &[u8]) {
+    pub(crate) fn send(&mut self, arg: SArg) {
+        let SArg { next_ip, data } = arg;
+
         if let Some(&mac_addr) = Arp(self).get_mac_addr(next_ip) {
             println!(
                 "{} sending data to MAC addr: {} for IP: {}",
@@ -306,12 +321,14 @@ impl Iface {
             );
             self.common.invoke(NextOp::EtherSend {
                 ether_id: self.lower,
-                dst_mac: mac_addr,
-                ethertype: Ether::ETHERTYPE_IPV4,
-                payload: data.to_vec(),
+                arg: ether::SArg {
+                    dst_mac: mac_addr,
+                    ethertype: Ether::ETHERTYPE_IPV4,
+                    payload: data,
+                },
             });
         } else {
-            self.arp_wait_queue.push_back((next_ip, data.into()));
+            self.arp_wait_queue.push_back((next_ip, data));
             println!("{} saved send req temporarily", self.dbg_header());
             println!("{} sending arp req to {}", self.dbg_header(), next_ip);
             Arp(self).send_arp_request(next_ip);

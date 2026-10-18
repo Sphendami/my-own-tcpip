@@ -1,16 +1,10 @@
 use std::fmt::Display;
 use std::sync::mpsc;
 
-use crate::node::ether::MacAddr;
+use crate::node::ether::{self, MacAddr};
 use crate::node::{Common, DbgInfo, NextOp};
 
 pub(crate) type PortId = u32;
-
-#[derive(Debug)]
-pub(crate) struct Msg {
-    pub(crate) port_id: PortId,
-    pub(crate) data: Vec<u8>,
-}
 
 enum PortState {
     NoMate {
@@ -20,6 +14,10 @@ enum PortState {
         tx: mpsc::Sender<Vec<u8>>,
         name: String,
     },
+}
+
+pub(crate) struct SArg {
+    pub(crate) data: Vec<u8>,
 }
 
 pub(crate) struct Port {
@@ -81,7 +79,7 @@ impl Port {
         if let Ok(data) = self.rx.try_recv() {
             self.common.invoke(NextOp::EtherReceive {
                 ether_id: self.upper,
-                msg: Msg {
+                arg: ether::RArg {
                     port_id: self.id,
                     data,
                 },
@@ -92,7 +90,9 @@ impl Port {
         }
     }
 
-    pub(crate) fn send(&self, data: Vec<u8>) {
+    pub(crate) fn send(&self, arg: SArg) {
+        let SArg { data } = arg;
+
         match self.state {
             PortState::NoMate { .. } => {
                 eprintln!("{} not connected (ignore the send)", self.dbg_header());

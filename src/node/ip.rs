@@ -220,7 +220,13 @@ mod test {
 }
 
 #[derive(Debug)]
-pub(crate) struct Msg(pub(crate) Vec<u8>);
+pub(crate) struct RArg(pub(crate) Vec<u8>);
+
+pub(crate) struct SArg {
+    pub(crate) protocol: u8,
+    pub(crate) dst_ip: IpAddr,
+    pub(crate) payload: Vec<u8>,
+}
 
 #[derive(Clone, Copy)]
 pub(crate) enum NextHop {
@@ -284,16 +290,16 @@ impl Ip {
         self.lowers.iter().any(|addr| *addr == ip_addr)
     }
 
-    pub(crate) fn recv(&self, msg: iface::Msg) -> Option<Msg> {
-        if let Some(msg) = self.handle(msg) {
-            Some(msg)
+    pub(crate) fn recv(&self, arg: RArg) -> Option<Vec<u8>> {
+        if let Some(arg) = self.handle(arg) {
+            Some(arg)
         } else {
             None
         }
     }
 
-    fn handle(&self, msg: iface::Msg) -> Option<Msg> {
-        let iface::Msg(data) = msg;
+    fn handle(&self, arg: RArg) -> Option<Vec<u8>> {
+        let RArg(data) = arg;
 
         let h_len = IpV4Header::U8_REPR_SIZE as usize;
         let mut header = match IpV4Header::try_from(&data[0..h_len]) {
@@ -316,7 +322,7 @@ impl Ip {
 
         if self.is_my_ip(header.dest_ip) {
             println!("{} the packet is for me", self.dbg_header());
-            return Some(Msg(payload.to_vec()));
+            return Some(payload.to_vec());
         } else {
             // Not for me. Forward it.
             let decreased = header.decrease_ttl();
@@ -330,7 +336,13 @@ impl Ip {
         }
     }
 
-    pub(crate) fn send(&self, protocol: u8, dest_ip: IpAddr, data: &[u8]) {
+    pub(crate) fn send(&self, arg: SArg) {
+        let SArg {
+            protocol,
+            dst_ip: dest_ip,
+            payload: data,
+        } = arg;
+
         let (iface_id, next_hop) = self
             .resolve_routing(dest_ip)
             .expect(&format!("failed to resolve routing to {}", dest_ip));
@@ -339,11 +351,11 @@ impl Ip {
             NextHop::Direct => header.dest_ip,
             NextHop::Indirect(ip) => ip,
         };
-        let data = [&<Vec<u8>>::from(&header), data].concat();
+        let header_bytes = Vec::from(&header);
+        let data = [header_bytes.as_slice(), data.as_slice()].concat();
         self.common.invoke(NextOp::IfaceSend {
             iface_id,
-            next_ip,
-            data,
+            arg: iface::SArg { next_ip, data },
         });
     }
 
@@ -358,8 +370,7 @@ impl Ip {
         let data = [&<Vec<u8>>::from(&header), data].concat();
         self.common.invoke(NextOp::IfaceSend {
             iface_id,
-            next_ip,
-            data,
+            arg: iface::SArg { next_ip, data },
         });
     }
 }

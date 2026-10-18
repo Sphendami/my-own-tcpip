@@ -14,37 +14,13 @@ use self::ip::{Ip, IpAddr};
 use self::port::{Port, PortId};
 
 pub(crate) enum NextOp {
-    PortSend {
-        port_id: PortId,
-        data: Vec<u8>,
-    },
-    EtherSend {
-        ether_id: MacAddr,
-        dst_mac: MacAddr,
-        ethertype: u16,
-        payload: Vec<u8>,
-    },
-    IfaceSend {
-        iface_id: IpAddr,
-        next_ip: IpAddr,
-        data: Vec<u8>,
-    },
-    IpSend {
-        protocol: u8,
-        dst_ip: IpAddr,
-        payload: Vec<u8>,
-    },
-    EtherReceive {
-        ether_id: MacAddr,
-        msg: port::Msg,
-    },
-    IfaceReceive {
-        iface_id: IpAddr,
-        msg: ether::Msg,
-    },
-    IpReceive {
-        msg: iface::Msg,
-    },
+    PortSend { port_id: PortId, arg: port::SArg },
+    EtherSend { ether_id: MacAddr, arg: ether::SArg },
+    IfaceSend { iface_id: IpAddr, arg: iface::SArg },
+    IpSend { arg: ip::SArg },
+    EtherReceive { ether_id: MacAddr, arg: ether::RArg },
+    IfaceReceive { iface_id: IpAddr, arg: iface::RArg },
+    IpReceive { arg: ip::RArg },
 }
 
 #[derive(Debug, Clone)]
@@ -67,7 +43,7 @@ pub(crate) struct Node {
     pub(crate) ifaces: HashMap<IpAddr, Iface>,
     pub(crate) ethers: HashMap<MacAddr, Ether>,
     pub(crate) ports: HashMap<PortId, Port>,
-    pub(crate) on_recv: Option<Box<dyn Fn(Common, ip::Msg) + Send>>,
+    pub(crate) on_recv: Option<Box<dyn Fn(Common, Vec<u8>) + Send>>,
 }
 
 impl Node {
@@ -100,9 +76,9 @@ impl Node {
                     continue;
                 };
                 match op {
-                    NextOp::PortSend { port_id, data } => {
+                    NextOp::PortSend { port_id, arg } => {
                         if let Some(port) = self.ports.get(&port_id) {
-                            port.send(data);
+                            port.send(arg);
                         } else {
                             eprintln!(
                                 "Node#{:02} Port#{} not found (ignore the send)",
@@ -110,14 +86,9 @@ impl Node {
                             );
                         }
                     }
-                    NextOp::EtherSend {
-                        ether_id,
-                        dst_mac,
-                        ethertype,
-                        payload,
-                    } => {
+                    NextOp::EtherSend { ether_id, arg } => {
                         if let Some(ether) = self.ethers.get(&ether_id) {
-                            ether.send(dst_mac, ethertype, &payload);
+                            ether.send(arg);
                         } else {
                             eprintln!(
                                 "Node#{:02} Ether#{} not found (ignore the send)",
@@ -125,13 +96,9 @@ impl Node {
                             );
                         }
                     }
-                    NextOp::IfaceSend {
-                        iface_id,
-                        next_ip,
-                        data,
-                    } => {
+                    NextOp::IfaceSend { iface_id, arg } => {
                         if let Some(iface) = self.ifaces.get_mut(&iface_id) {
-                            iface.send(next_ip, &data);
+                            iface.send(arg);
                         } else {
                             eprintln!(
                                 "Node#{:02} Iface#{} not found (ignore the send)",
@@ -139,20 +106,16 @@ impl Node {
                             );
                         }
                     }
-                    NextOp::IpSend {
-                        protocol,
-                        dst_ip,
-                        payload,
-                    } => {
+                    NextOp::IpSend { arg } => {
                         if let Some(ip) = &mut self.ip {
-                            ip.send(protocol, dst_ip, &payload);
+                            ip.send(arg);
                         } else {
                             eprintln!("Node#{:02} Ip not found (ignore the send)", self.id);
                         }
                     }
-                    NextOp::EtherReceive { ether_id, msg } => {
+                    NextOp::EtherReceive { ether_id, arg } => {
                         if let Some(ether) = self.ethers.get_mut(&ether_id) {
-                            ether.recv(msg);
+                            ether.recv(arg);
                         } else {
                             eprintln!(
                                 "Node#{:02} Ether#{} not found (ignore the receive)",
@@ -160,9 +123,9 @@ impl Node {
                             );
                         }
                     }
-                    NextOp::IfaceReceive { iface_id, msg } => {
+                    NextOp::IfaceReceive { iface_id, arg } => {
                         if let Some(iface) = self.ifaces.get_mut(&iface_id) {
-                            iface.recv(msg);
+                            iface.recv(arg);
                         } else {
                             eprintln!(
                                 "Node#{:02} Iface#{} not found (ignore the receive)",
@@ -170,13 +133,13 @@ impl Node {
                             );
                         }
                     }
-                    NextOp::IpReceive { msg } => {
+                    NextOp::IpReceive { arg } => {
                         if let Some(ip) = &self.ip {
-                            let msg = ip.recv(msg);
-                            if let Some(msg) = msg
+                            let data = ip.recv(arg);
+                            if let Some(data) = data
                                 && let Some(on_recv) = &self.on_recv
                             {
-                                on_recv(self.common.clone(), msg);
+                                on_recv(self.common.clone(), data);
                             }
                         } else {
                             eprintln!("Node#{:02} Ip not found (ignore the receive)", self.id);
