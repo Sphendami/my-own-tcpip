@@ -38,14 +38,11 @@ fn main() {
         node.on_recv = Some(Box::new(move |common, msg| {
             println!("Node#{} received: {:02X?}", common.node_id, msg);
             println!("Node#{} sending back to {}", common.node_id, node4_ip);
-            common
-                .op_tx
-                .send(NextOp::IpSend {
-                    protocol: Ip::IP_PROTOCOL_UDP,
-                    dst_ip: node4_ip,
-                    payload: msg.0,
-                })
-                .unwrap();
+            common.invoke(NextOp::IpSend {
+                protocol: Ip::IP_PROTOCOL_UDP,
+                dst_ip: node4_ip,
+                payload: msg.0,
+            });
         }));
 
         node
@@ -115,14 +112,11 @@ fn main() {
         node.ip = Some(ip);
 
         // initial data
-        node.common
-            .op_tx
-            .send(NextOp::IpSend {
-                protocol: Ip::IP_PROTOCOL_UDP,
-                dst_ip: node0_ip,
-                payload: vec![0, 1, 2, 3],
-            })
-            .unwrap();
+        node.common.invoke(NextOp::IpSend {
+            protocol: Ip::IP_PROTOCOL_UDP,
+            dst_ip: node0_ip,
+            payload: vec![0, 1, 2, 3],
+        });
 
         node
     };

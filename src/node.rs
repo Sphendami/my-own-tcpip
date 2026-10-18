@@ -50,7 +50,13 @@ pub(crate) enum NextOp {
 #[derive(Debug, Clone)]
 pub(crate) struct Common {
     pub(crate) node_id: u32,
-    pub(crate) op_tx: mpsc::Sender<NextOp>,
+    op_tx: mpsc::Sender<NextOp>,
+}
+
+impl Common {
+    pub(crate) fn invoke(&self, next_op: NextOp) {
+        self.op_tx.send(next_op).unwrap();
+    }
 }
 
 pub(crate) struct Node {

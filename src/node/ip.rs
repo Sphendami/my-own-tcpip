@@ -340,14 +340,11 @@ impl Ip {
             NextHop::Indirect(ip) => ip,
         };
         let data = [&<Vec<u8>>::from(&header), data].concat();
-        self.common
-            .op_tx
-            .send(NextOp::IfaceSend {
-                iface_id,
-                next_ip,
-                data,
-            })
-            .unwrap();
+        self.common.invoke(NextOp::IfaceSend {
+            iface_id,
+            next_ip,
+            data,
+        });
     }
 
     fn send_with_header(&self, header: IpV4Header, data: &[u8]) {
@@ -359,14 +356,11 @@ impl Ip {
             NextHop::Indirect(ip) => ip,
         };
         let data = [&<Vec<u8>>::from(&header), data].concat();
-        self.common
-            .op_tx
-            .send(NextOp::IfaceSend {
-                iface_id,
-                next_ip,
-                data,
-            })
-            .unwrap();
+        self.common.invoke(NextOp::IfaceSend {
+            iface_id,
+            next_ip,
+            data,
+        });
     }
 }
 

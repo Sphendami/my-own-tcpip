@@ -79,16 +79,13 @@ impl Port {
 
     pub(crate) fn try_recv(&self) -> bool {
         if let Ok(data) = self.rx.try_recv() {
-            self.common
-                .op_tx
-                .send(NextOp::EtherReceive {
-                    ether_id: self.upper,
-                    msg: Msg {
-                        port_id: self.id,
-                        data,
-                    },
-                })
-                .unwrap();
+            self.common.invoke(NextOp::EtherReceive {
+                ether_id: self.upper,
+                msg: Msg {
+                    port_id: self.id,
+                    data,
+                },
+            });
             true
         } else {
             false

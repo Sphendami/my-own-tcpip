@@ -121,30 +121,22 @@ impl Arp<'_> {
     fn send_arp_request(&self, dest_ip: IpAddr) {
         let arp_packet =
             ArpPacket::new(ArpPacket::OP_REQUEST, dest_ip, self.0.lower, self.0.ip_addr);
-        self.0
-            .common
-            .op_tx
-            .send(NextOp::EtherSend {
-                ether_id: self.0.lower,
-                dst_mac: Ether::MAC_ADDR_BROADCAST,
-                ethertype: Ether::ETHERTYPE_ARP,
-                payload: Vec::from(arp_packet),
-            })
-            .unwrap();
+        self.0.common.invoke(NextOp::EtherSend {
+            ether_id: self.0.lower,
+            dst_mac: Ether::MAC_ADDR_BROADCAST,
+            ethertype: Ether::ETHERTYPE_ARP,
+            payload: Vec::from(arp_packet),
+        });
     }
 
     fn send_arp_reply(&self, dest_mac: MacAddr, dest_ip: IpAddr) {
         let arp_packet = ArpPacket::new(ArpPacket::OP_REPLY, dest_ip, self.0.lower, self.0.ip_addr);
-        self.0
-            .common
-            .op_tx
-            .send(NextOp::EtherSend {
-                ether_id: self.0.lower,
-                dst_mac: dest_mac,
-                ethertype: Ether::ETHERTYPE_ARP,
-                payload: Vec::from(arp_packet),
-            })
-            .unwrap();
+        self.0.common.invoke(NextOp::EtherSend {
+            ether_id: self.0.lower,
+            dst_mac: dest_mac,
+            ethertype: Ether::ETHERTYPE_ARP,
+            payload: Vec::from(arp_packet),
+        });
     }
 
     fn handle(&mut self, arp_packet_data: &[u8]) -> Option<ArpHandleResult> {
@@ -256,7 +248,7 @@ impl Iface {
 
     pub(crate) fn recv(&mut self, msg: ether::Msg) {
         if let Some(msg) = self.handle(msg) {
-            self.common.op_tx.send(NextOp::IpReceive { msg }).unwrap();
+            self.common.invoke(NextOp::IpReceive { msg });
         }
     }
 
@@ -312,15 +304,12 @@ impl Iface {
                 mac_addr,
                 next_ip
             );
-            self.common
-                .op_tx
-                .send(NextOp::EtherSend {
-                    ether_id: self.lower,
-                    dst_mac: mac_addr,
-                    ethertype: Ether::ETHERTYPE_IPV4,
-                    payload: data.to_vec(),
-                })
-                .unwrap();
+            self.common.invoke(NextOp::EtherSend {
+                ether_id: self.lower,
+                dst_mac: mac_addr,
+                ethertype: Ether::ETHERTYPE_IPV4,
+                payload: data.to_vec(),
+            });
         } else {
             self.arp_wait_queue.push_back((next_ip, data.into()));
             println!("{} saved send req temporarily", self.dbg_header());

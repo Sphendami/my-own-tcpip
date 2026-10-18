@@ -179,13 +179,10 @@ impl Ether {
 
     pub(crate) fn recv(&mut self, msg: port::Msg) {
         if let Some(msg) = self.handle(msg) {
-            self.common
-                .op_tx
-                .send(NextOp::IfaceReceive {
-                    iface_id: self.upper,
-                    msg,
-                })
-                .unwrap();
+            self.common.invoke(NextOp::IfaceReceive {
+                iface_id: self.upper,
+                msg,
+            });
         }
     }
 
@@ -253,13 +250,10 @@ impl Ether {
             }
 
             for fwd_port_id in fwd_port_ids {
-                self.common
-                    .op_tx
-                    .send(NextOp::PortSend {
-                        port_id: fwd_port_id,
-                        data: frame.clone(),
-                    })
-                    .unwrap();
+                self.common.invoke(NextOp::PortSend {
+                    port_id: fwd_port_id,
+                    data: frame.clone(),
+                });
             }
         }
 
@@ -308,13 +302,10 @@ impl Ether {
         );
 
         for port_id in port_ids {
-            self.common
-                .op_tx
-                .send(NextOp::PortSend {
-                    port_id,
-                    data: frame.clone(),
-                })
-                .unwrap();
+            self.common.invoke(NextOp::PortSend {
+                port_id,
+                data: frame.clone(),
+            });
         }
     }
 }
