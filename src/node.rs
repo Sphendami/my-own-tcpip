@@ -10,17 +10,17 @@ use std::thread;
 
 use self::ether::{Ether, MacAddr};
 use self::iface::Iface;
-use self::ip::{Ip, IpAddr};
+use self::ip::{Ip, IpAddr, IpId};
 use self::port::{Port, PortId};
 
 pub(crate) enum NextOp {
     PortSend { port_id: PortId, arg: port::SArg },
     EtherSend { ether_id: MacAddr, arg: ether::SArg },
     IfaceSend { iface_id: IpAddr, arg: iface::SArg },
-    IpSend { arg: ip::SArg },
+    IpSend { ip_id: IpId, arg: ip::SArg },
     EtherReceive { ether_id: MacAddr, arg: ether::RArg },
     IfaceReceive { iface_id: IpAddr, arg: iface::RArg },
-    IpReceive { arg: ip::RArg },
+    IpReceive { ip_id: IpId, arg: ip::RArg },
 }
 
 #[derive(Debug, Clone)]
@@ -39,7 +39,7 @@ pub(crate) struct Node {
     pub(crate) id: u32,
     op_rx: mpsc::Receiver<NextOp>,
     pub(crate) common: Common,
-    pub(crate) ip: Option<Ip>,
+    pub(crate) ips: HashMap<IpId, Ip>,
     pub(crate) ifaces: HashMap<IpAddr, Iface>,
     pub(crate) ethers: HashMap<MacAddr, Ether>,
     pub(crate) ports: HashMap<PortId, Port>,
@@ -53,7 +53,7 @@ impl Node {
             id,
             op_rx,
             common: Common { node_id: id, op_tx },
-            ip: None,
+            ips: HashMap::new(),
             ifaces: HashMap::new(),
             ethers: HashMap::new(),
             ports: HashMap::new(),
@@ -106,8 +106,8 @@ impl Node {
                             );
                         }
                     }
-                    NextOp::IpSend { arg } => {
-                        if let Some(ip) = &mut self.ip {
+                    NextOp::IpSend { ip_id, arg } => {
+                        if let Some(ip) = self.ips.get(&ip_id) {
                             ip.send(arg);
                         } else {
                             eprintln!("Node#{:02} Ip not found (ignore the send)", self.id);
@@ -133,8 +133,8 @@ impl Node {
                             );
                         }
                     }
-                    NextOp::IpReceive { arg } => {
-                        if let Some(ip) = &self.ip {
+                    NextOp::IpReceive { ip_id, arg } => {
+                        if let Some(ip) = self.ips.get_mut(&ip_id) {
                             let data = ip.recv(arg);
                             if let Some(data) = data
                                 && let Some(on_recv) = &self.on_recv

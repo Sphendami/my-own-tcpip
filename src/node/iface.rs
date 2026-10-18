@@ -3,7 +3,7 @@ use std::fmt::Display;
 use std::ops::Deref;
 
 use crate::node::ether::{self, Ether, MacAddr};
-use crate::node::ip::{self, IpAddr};
+use crate::node::ip::{self, IpAddr, IpId};
 use crate::node::{Common, DbgInfo, NextOp};
 
 struct ArpPacket {
@@ -243,16 +243,18 @@ pub(crate) struct Iface {
     pub(crate) ip_addr: IpAddr,
     arp_table: HashMap<IpAddr, MacAddr>,
     arp_wait_queue: VecDeque<(IpAddr, Vec<u8>)>,
+    upper: IpId,
     lower: MacAddr,
     common: Common,
 }
 
 impl Iface {
-    pub(crate) fn new(ip_addr: IpAddr, lower: MacAddr, common: Common) -> Self {
+    pub(crate) fn new(ip_addr: IpAddr, upper: IpId, lower: MacAddr, common: Common) -> Self {
         Iface {
             ip_addr,
             arp_table: HashMap::new(),
             arp_wait_queue: VecDeque::new(),
+            upper,
             lower,
             common,
         }
@@ -260,7 +262,10 @@ impl Iface {
 
     pub(crate) fn recv(&mut self, arg: RArg) {
         if let Some(arg) = self.handle(arg) {
-            self.common.invoke(NextOp::IpReceive { arg });
+            self.common.invoke(NextOp::IpReceive {
+                ip_id: self.upper,
+                arg,
+            });
         }
     }
 

@@ -256,7 +256,10 @@ impl RoutingTable {
     }
 }
 
+pub(crate) type IpId = u32;
+
 pub(crate) struct Ip {
+    id: IpId,
     routing_table: RoutingTable,
     lowers: Vec<IpAddr>,
     common: Common,
@@ -266,8 +269,9 @@ impl Ip {
     // pub(crate) const IP_PROTOCOL_TCP: u8 = 0x06;
     pub(crate) const IP_PROTOCOL_UDP: u8 = 0x11;
 
-    pub(crate) fn new(lowers: Vec<IpAddr>, common: Common) -> Self {
+    pub(crate) fn new(id: IpId, lowers: Vec<IpAddr>, common: Common) -> Self {
         Self {
+            id,
             routing_table: RoutingTable::new(),
             lowers,
             common,
@@ -377,7 +381,7 @@ impl Ip {
 
 impl Display for Ip {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "IP")
+        write!(f, "IP#{}", self.id)
     }
 }
 
