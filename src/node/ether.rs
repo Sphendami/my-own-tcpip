@@ -3,7 +3,7 @@ use std::fmt::Display;
 use std::ops::Deref;
 
 use crate::node::ip::IpAddr;
-use crate::node::phy;
+use crate::node::port::{self, PortId};
 use crate::node::{Common, DbgInfo, NextOp};
 
 #[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
@@ -136,10 +136,9 @@ pub(crate) struct Msg {
 
 pub(crate) struct Ether {
     pub(crate) mac_addr: MacAddr,
-    mac_addr_table: HashMap<MacAddr, phy::PortId>,
+    mac_addr_table: HashMap<MacAddr, PortId>,
     upper: IpAddr,
-    lower: phy::Id,
-    lower_port_ids__: Vec<phy::PortId>,
+    lowers: Vec<PortId>,
     common: Common,
 }
 
@@ -153,26 +152,24 @@ impl Ether {
     pub(crate) fn new(
         mac_addr: MacAddr,
         upper: IpAddr,
-        lower: phy::Id,
-        lower_port_ids__: Vec<phy::PortId>,
+        lowers: Vec<PortId>,
         common: Common,
     ) -> Self {
         Ether {
             mac_addr,
             mac_addr_table: HashMap::new(),
             upper,
-            lower,
-            lower_port_ids__,
+            lowers,
             common,
         }
     }
 
-    fn resolve_port_ids(&self, dst_mac: MacAddr, except: Option<phy::PortId>) -> Vec<phy::PortId> {
+    fn resolve_port_ids(&self, dst_mac: MacAddr, except: Option<PortId>) -> Vec<PortId> {
         match self.mac_addr_table.get(&dst_mac) {
             Some(&port_id) => vec![port_id],
             // flooding except the port it came from
             None => self
-                .lower_port_ids__
+                .lowers
                 .clone()
                 .into_iter()
                 .filter(|&id| Some(id) != except)
@@ -180,7 +177,7 @@ impl Ether {
         }
     }
 
-    pub(crate) fn recv(&mut self, msg: phy::Msg) {
+    pub(crate) fn recv(&mut self, msg: port::Msg) {
         if let Some(msg) = self.handle(msg) {
             self.common
                 .op_tx
@@ -192,8 +189,8 @@ impl Ether {
         }
     }
 
-    fn handle(&mut self, msg: phy::Msg) -> Option<Msg> {
-        let phy::Msg {
+    fn handle(&mut self, msg: port::Msg) -> Option<Msg> {
+        let port::Msg {
             port_id,
             data: frame,
         } = msg;
@@ -258,8 +255,7 @@ impl Ether {
             for fwd_port_id in fwd_port_ids {
                 self.common
                     .op_tx
-                    .send(NextOp::PhySend {
-                        phy_id: self.lower,
+                    .send(NextOp::PortSend {
                         port_id: fwd_port_id,
                         data: frame.clone(),
                     })
@@ -314,8 +310,7 @@ impl Ether {
         for port_id in port_ids {
             self.common
                 .op_tx
-                .send(NextOp::PhySend {
-                    phy_id: self.lower,
+                .send(NextOp::PortSend {
                     port_id,
                     data: frame.clone(),
                 })

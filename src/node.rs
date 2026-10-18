@@ -1,7 +1,7 @@
 pub(crate) mod ether;
 pub(crate) mod iface;
 pub(crate) mod ip;
-pub(crate) mod phy;
+pub(crate) mod port;
 
 use std::collections::HashMap;
 use std::fmt::Display;
@@ -11,12 +11,11 @@ use std::thread;
 use self::ether::{Ether, MacAddr};
 use self::iface::Iface;
 use self::ip::{Ip, IpAddr};
-use self::phy::Phy;
+use self::port::{Port, PortId};
 
 pub(crate) enum NextOp {
-    PhySend {
-        phy_id: phy::Id,
-        port_id: phy::PortId,
+    PortSend {
+        port_id: PortId,
         data: Vec<u8>,
     },
     EtherSend {
@@ -37,7 +36,7 @@ pub(crate) enum NextOp {
     },
     EtherReceive {
         ether_id: MacAddr,
-        msg: phy::Msg,
+        msg: port::Msg,
     },
     IfaceReceive {
         iface_id: IpAddr,
@@ -61,7 +60,7 @@ pub(crate) struct Node {
     pub(crate) ip: Option<Ip>,
     pub(crate) ifaces: HashMap<IpAddr, Iface>,
     pub(crate) ethers: HashMap<MacAddr, Ether>,
-    pub(crate) phys: HashMap<phy::Id, Phy>,
+    pub(crate) ports: HashMap<PortId, Port>,
     pub(crate) on_recv: Option<Box<dyn Fn(Common, ip::Msg) + Send>>,
 }
 
@@ -75,17 +74,9 @@ impl Node {
             ip: None,
             ifaces: HashMap::new(),
             ethers: HashMap::new(),
-            phys: HashMap::new(),
+            ports: HashMap::new(),
             on_recv: None,
         }
-    }
-
-    pub(crate) fn get_port_mut(
-        &mut self,
-        phy_id: phy::Id,
-        port_id: phy::PortId,
-    ) -> Option<&mut phy::Port> {
-        self.phys.get_mut(&phy_id)?.ports.get_mut(&port_id)
     }
 
     pub(crate) fn run(mut self) -> thread::JoinHandle<()> {
@@ -94,8 +85,8 @@ impl Node {
                 std::thread::sleep(std::time::Duration::from_millis(1));
 
                 // poll received data
-                self.phys.values().for_each(|phy| {
-                    phy.try_recv();
+                self.ports.values().for_each(|port| {
+                    port.try_recv();
                 });
 
                 // handle next operation
@@ -103,17 +94,13 @@ impl Node {
                     continue;
                 };
                 match op {
-                    NextOp::PhySend {
-                        phy_id,
-                        port_id,
-                        data,
-                    } => {
-                        if let Some(phy) = self.phys.get(&phy_id) {
-                            phy.send(port_id, data);
+                    NextOp::PortSend { port_id, data } => {
+                        if let Some(port) = self.ports.get(&port_id) {
+                            port.send(data);
                         } else {
                             eprintln!(
-                                "Node#{:02} Phy#{} not found (ignore the send)",
-                                self.id, phy_id
+                                "Node#{:02} Port#{} not found (ignore the send)",
+                                self.id, port_id
                             );
                         }
                     }
